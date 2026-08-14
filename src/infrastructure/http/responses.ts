@@ -8,6 +8,8 @@ const statusByCode: Record<ApplicationError["code"], number> = {
   closed_survey: 409,
   unauthorized_property: 403,
   invalid_answers: 422,
+  invalid_vote_state: 409,
+  idempotency_conflict: 409,
   duplicate_vote: 409,
   not_found: 404,
 };
@@ -20,7 +22,23 @@ export function requestIdFrom(request: Request): string {
 export function assertSameOrigin(request: Request): void {
   const origin = request.headers.get("origin");
   const fetchSite = request.headers.get("sec-fetch-site");
-  if ((origin && origin !== new URL(request.url).origin) || (fetchSite && !["same-origin", "none"].includes(fetchSite))) {
+  const requestUrl = new URL(request.url);
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",", 1)[0]?.trim();
+  const forwardedProtocol = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim();
+  const expectedHost = forwardedHost || request.headers.get("host") || requestUrl.host;
+  const expectedProtocol = forwardedProtocol ? `${forwardedProtocol}:` : requestUrl.protocol;
+  let originMatches = true;
+
+  if (origin) {
+    try {
+      const originUrl = new URL(origin);
+      originMatches = originUrl.host === expectedHost && originUrl.protocol === expectedProtocol;
+    } catch {
+      originMatches = false;
+    }
+  }
+
+  if (!originMatches || (fetchSite && !["same-origin", "none"].includes(fetchSite))) {
     throw new ApplicationError("unauthenticated", "Cross-origin mutation is not allowed");
   }
 }

@@ -5,16 +5,29 @@ import { requireCurrentSession } from "@/src/infrastructure/session/current-sess
 
 export const runtime = "nodejs";
 
+export async function GET(request: Request) {
+  const requestId = requestIdFrom(request);
+  const app = createApplication();
+  try {
+    const session = await requireCurrentSession(app.sessions, app.config.sessionCookieName);
+    const user = await app.authentication.currentUser(session.subjectId);
+    return Response.json({ authenticated: true, user, expiresAt: session.expiresAt, requestId });
+  } catch (error) {
+    return errorResponse(error, requestId);
+  }
+}
+
 export async function DELETE(request: Request) {
   const requestId = requestIdFrom(request);
   const app = createApplication();
   try {
     assertSameOrigin(request);
-    const session = await requireCurrentSession(app.sessions, app.config.sessionCookieName);
-    await app.sessions.revoke(session.sessionId);
-    (await cookies()).delete(app.config.sessionCookieName);
+    const cookieStore = await cookies();
+    const token = cookieStore.get(app.config.sessionCookieName)?.value;
+    if (token) await app.sessions.revoke(token);
+    cookieStore.delete(app.config.sessionCookieName);
     await app.audit.append({
-      eventId: crypto.randomUUID(), eventType: "logout", actorId: session.subjectId,
+      eventId: crypto.randomUUID(), eventType: "SESSION_REVOKED",
       requestId, occurredAt: new Date().toISOString(), outcome: "success", metadata: {},
     });
     return new Response(null, { status: 204 });

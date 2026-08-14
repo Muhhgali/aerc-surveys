@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { SessionStore } from "@/src/application/ports/repositories";
 import type { AssuranceLevel } from "@/src/domain/identity";
-import type { TrustedSession } from "@/src/domain/session";
+import type { SessionCredential, TrustedSession } from "@/src/domain/session";
 
 export class SessionService {
   constructor(
@@ -9,8 +9,9 @@ export class SessionService {
     private readonly ttlSeconds: number,
   ) {}
 
-  async create(subjectId: string, assuranceLevel: AssuranceLevel): Promise<TrustedSession> {
+  async create(subjectId: string, assuranceLevel: AssuranceLevel): Promise<SessionCredential> {
     const createdAt = new Date();
+    const token = randomBytes(32).toString("base64url");
     const session: TrustedSession = {
       sessionId: randomUUID(),
       subjectId,
@@ -18,21 +19,25 @@ export class SessionService {
       createdAt: createdAt.toISOString(),
       expiresAt: new Date(createdAt.getTime() + this.ttlSeconds * 1000).toISOString(),
     };
-    await this.store.create(session);
-    return session;
+    await this.store.create(session, hashSessionToken(token));
+    return { session, token };
   }
 
-  async requireActive(sessionId: string, now = new Date()): Promise<TrustedSession> {
-    const session = await this.store.findById(sessionId);
+  async requireActive(token: string, now = new Date()): Promise<TrustedSession> {
+    const session = await this.store.findByTokenHash(hashSessionToken(token));
     if (!session || session.revokedAt || new Date(session.expiresAt) <= now) {
       throw new InvalidSessionError();
     }
     return session;
   }
 
-  async revoke(sessionId: string): Promise<void> {
-    await this.store.revoke(sessionId, new Date().toISOString());
+  async revoke(token: string): Promise<void> {
+    await this.store.revokeByTokenHash(hashSessionToken(token), new Date().toISOString());
   }
+}
+
+export function hashSessionToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
 export class InvalidSessionError extends Error {

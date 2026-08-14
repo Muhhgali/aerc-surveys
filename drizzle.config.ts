@@ -1,13 +1,14 @@
-import "dotenv/config";
+import { config } from "dotenv";
 import { defineConfig } from "drizzle-kit";
+
+config({ path: [".env.local", ".env"] });
+const databaseUrl = process.env.DATABASE_URL;
 
 export default defineConfig({
   dialect: "postgresql",
   schema: "./src/infrastructure/database/schema.ts",
   out: "./drizzle",
-  dbCredentials: {
-    url: process.env.DATABASE_URL ?? "postgresql://postgres:postgres@127.0.0.1:5432/aerc_surveys",
-  },
+  ...(databaseUrl ? { dbCredentials: { url: databaseUrl } } : {}),
   strict: true,
   verbose: true,
 });

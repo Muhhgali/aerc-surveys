@@ -3,12 +3,14 @@ import { OrganizationService } from "@/src/application/organization/organization
 import type {
   EligibleParticipant,
   LocalPersonalAccount,
-  SubmitVoteRecord,
+  StartOrResumeVoteRecord,
   SurveyVotingState,
   VoteRecord,
   VotingRepository,
 } from "@/src/application/ports/data-repositories";
+import type { SessionStore } from "@/src/application/ports/repositories";
 import { PropertyService } from "@/src/application/property/property-service";
+import { hashSessionToken, SessionService } from "@/src/application/session/session-service";
 import { VoteService } from "@/src/application/voting/vote-service";
 import { MockPropertyProvider } from "@/src/infrastructure/providers/mock/mock-providers";
 
@@ -18,6 +20,11 @@ const propertyId = "00000000-0000-4000-8000-000000000201";
 const questionId = "00000000-0000-4000-8000-000000000101";
 
 const logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
+const draftVote = (): VoteRecord => ({
+  id: "00000000-0000-4000-8000-000000000701", surveyId, userId, propertyId,
+  idempotencyKey: "00000000-0000-4000-8000-000000000601", status: "draft", stateVersion: 1,
+  submittedAt: null, accountNumber: "1911", address: "г. Астана, ул. Геодезическая, д. 12", unit: "52", answers: [],
+});
 
 class FakeVotingRepository implements VotingRepository {
   survey: SurveyVotingState | null = {
@@ -27,25 +34,22 @@ class FakeVotingRepository implements VotingRepository {
   participant: EligibleParticipant | null = { id: "participant", surveyId, userId, propertyId, status: "eligible" };
   existing: VoteRecord | null = null;
   owned: VoteRecord | null = null;
-  submitError: unknown;
 
   async getSurvey() { return this.survey; }
   async getParticipant() { return this.participant; }
-  async findByIdempotencyKey() { return this.existing; }
-  async submit(record: SubmitVoteRecord): Promise<VoteRecord> {
-    if (this.submitError) throw this.submitError;
-    return { id: "vote", surveyId: record.participant.surveyId, userId: record.participant.userId, propertyId: record.participant.propertyId, idempotencyKey: record.idempotencyKey };
-  }
   async findOwnedVote() { return this.owned; }
+  async findForUserSurvey() { return this.existing; }
+  async startOrResume(record: StartOrResumeVoteRecord) { return { vote: { ...draftVote(), idempotencyKey: record.idempotencyKey }, disposition: "started" as const }; }
+  async saveAnswer(record: Parameters<VotingRepository["saveAnswer"]>[0]) { return { ...draftVote(), stateVersion: 2, answers: [{ questionId: record.questionId, choice: record.choice }] }; }
+  async submitDraft() { return { ...(this.owned ?? draftVote()), status: "submitted" as const, submittedAt: new Date().toISOString() }; }
 }
 
-function command() {
+function startCommand() {
   return {
     authSessionId: "00000000-0000-4000-8000-000000000501",
     userId, surveyId, propertyId,
     idempotencyKey: "00000000-0000-4000-8000-000000000601",
     requestId: "request-test-0001",
-    answers: [{ questionId, choice: "for" as const }],
   };
 }
 
@@ -53,33 +57,64 @@ describe("VoteService", () => {
   it("rejects an invalid survey", async () => {
     const repository = new FakeVotingRepository();
     repository.survey = null;
-    await expect(new VoteService(repository).submit(command())).rejects.toMatchObject({ code: "invalid_survey" });
+    await expect(new VoteService(repository).startOrResume(startCommand())).rejects.toMatchObject({ code: "invalid_survey" });
   });
 
   it("rejects a closed survey", async () => {
     const repository = new FakeVotingRepository();
     repository.survey = { ...repository.survey!, status: "closed" };
-    await expect(new VoteService(repository).submit(command())).rejects.toMatchObject({ code: "closed_survey" });
+    await expect(new VoteService(repository).startOrResume(startCommand())).rejects.toMatchObject({ code: "closed_survey" });
   });
 
   it("rejects an unauthorized property", async () => {
     const repository = new FakeVotingRepository();
     repository.participant = null;
-    await expect(new VoteService(repository).submit(command())).rejects.toMatchObject({ code: "unauthorized_property" });
+    await expect(new VoteService(repository).startOrResume(startCommand())).rejects.toMatchObject({ code: "unauthorized_property" });
   });
 
-  it("maps a database duplicate vote constraint", async () => {
+  it("returns a completed workflow instead of creating a second vote", async () => {
     const repository = new FakeVotingRepository();
-    repository.submitError = { code: "23505" };
-    await expect(new VoteService(repository).submit(command())).rejects.toMatchObject({ code: "duplicate_vote" });
+    repository.existing = { ...draftVote(), status: "submitted", submittedAt: new Date().toISOString() };
+    await expect(new VoteService(repository).startOrResume(startCommand())).resolves.toMatchObject({ disposition: "completed", vote: { status: "submitted" } });
   });
 
   it("enforces vote ownership", async () => {
     const repository = new FakeVotingRepository();
     repository.owned = null;
     await expect(new VoteService(repository).getOwnedVote("another-vote", userId)).rejects.toMatchObject({ code: "not_found" });
-    repository.owned = { id: "owned", surveyId, userId, propertyId, idempotencyKey: "owned-key" };
+    repository.owned = { ...draftVote(), id: "owned", idempotencyKey: "owned-key" };
     await expect(new VoteService(repository).getOwnedVote("owned", userId)).resolves.toMatchObject({ id: "owned", userId });
+  });
+
+  it("rejects an answer from another survey and freezes submitted answers", async () => {
+    const repository = new FakeVotingRepository();
+    repository.owned = draftVote();
+    const service = new VoteService(repository);
+    await expect(service.autosave({ voteId: repository.owned.id, userId, questionId: "00000000-0000-4000-8000-999999999999", choice: "for", idempotencyKey: crypto.randomUUID(), requestId: "request-test-foreign" }))
+      .rejects.toMatchObject({ code: "invalid_answers" });
+    repository.owned = { ...draftVote(), status: "submitted" };
+    await expect(service.autosave({ voteId: repository.owned.id, userId, questionId, choice: "for", idempotencyKey: crypto.randomUUID(), requestId: "request-test-final" }))
+      .rejects.toMatchObject({ code: "invalid_vote_state" });
+  });
+});
+
+describe("SessionService", () => {
+  it("stores only a token hash and rejects expired or revoked sessions", async () => {
+    let storedHash = "";
+    let storedSession: Parameters<SessionStore["create"]>[0] | null = null;
+    const store: SessionStore = {
+      create: async (session, tokenHash) => { storedSession = session; storedHash = tokenHash; },
+      findByTokenHash: async (tokenHash) => tokenHash === storedHash ? storedSession : null,
+      revokeByTokenHash: async (_tokenHash, revokedAt) => { if (storedSession) storedSession = { ...storedSession, revokedAt }; },
+    };
+    const service = new SessionService(store, 60);
+    const credential = await service.create(userId, "demo");
+    expect(credential.token).toHaveLength(43);
+    expect(storedHash).toBe(hashSessionToken(credential.token));
+    expect(storedHash).not.toContain(credential.token);
+    await expect(service.requireActive(credential.token)).resolves.toMatchObject({ subjectId: userId });
+    await service.revoke(credential.token);
+    await expect(service.requireActive(credential.token)).rejects.toThrow("expired, or revoked");
   });
 });
 

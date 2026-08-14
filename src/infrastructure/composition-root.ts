@@ -1,5 +1,6 @@
 import "server-only";
 
+import { AuthenticationService } from "@/src/application/authentication/authentication-service";
 import { SessionService } from "@/src/application/session/session-service";
 import { OrganizationService } from "@/src/application/organization/organization-service";
 import { PropertyService } from "@/src/application/property/property-service";
@@ -8,6 +9,7 @@ import { loadProviderConfig } from "@/src/infrastructure/config/provider-config"
 import { getDatabaseClient } from "@/src/infrastructure/database/client";
 import {
   PostgresAuditRepository,
+  PostgresAuthenticationRepository,
   PostgresOrganizationMembershipRepository,
   PostgresPersonalAccountRepository,
   PostgresVotingRepository,
@@ -25,12 +27,14 @@ export function createApplication() {
   const providers = createProviderRegistry(config, consoleLogger);
   const database = getDatabaseClient();
   const accounts = new PostgresPersonalAccountRepository(database);
+  const identities = new PostgresAuthenticationRepository(database);
   const votingRepository = new PostgresVotingRepository(database);
   const membershipRepository = new PostgresOrganizationMembershipRepository(database);
   const audit = new PostgresAuditRepository(database);
   const sessions = new SessionService(new PostgresSessionStore(database), config.sessionTtlSeconds);
+  const authentication = new AuthenticationService(providers.identity, identities, sessions);
   const properties = new PropertyService(providers.property, accounts);
   const voting = new VoteService(votingRepository);
   const organizations = new OrganizationService(membershipRepository);
-  return { config, providers, database, sessions, properties, voting, organizations, audit };
+  return { config, providers, database, sessions, authentication, properties, voting, organizations, audit };
 }

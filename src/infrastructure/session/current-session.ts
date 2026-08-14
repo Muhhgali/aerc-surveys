@@ -6,10 +6,10 @@ import type { SessionService } from "@/src/application/session/session-service";
 import type { TrustedSession } from "@/src/domain/session";
 
 export async function requireCurrentSession(sessions: SessionService, cookieName: string): Promise<TrustedSession> {
-  const sessionId = (await cookies()).get(cookieName)?.value;
-  if (!sessionId) throw new ApplicationError("unauthenticated", "Authentication is required");
+  const token = (await cookies()).get(cookieName)?.value;
+  if (!token) throw new ApplicationError("unauthenticated", "Authentication is required");
   try {
-    return await sessions.requireActive(sessionId);
+    return await sessions.requireActive(token);
   } catch {
     throw new ApplicationError("unauthenticated", "Session is expired or revoked");
   }

@@ -7,8 +7,10 @@ let database: PGlite;
 
 beforeAll(async () => {
   database = new PGlite();
-  const migration = await readFile(resolve(process.cwd(), "drizzle/0000_production_data_model.sql"), "utf8");
-  await database.exec(migration.replaceAll("--> statement-breakpoint", ""));
+  for (const file of ["0000_production_data_model.sql", "0001_regular_madelyne_pryor.sql"]) {
+    const migration = await readFile(resolve(process.cwd(), `drizzle/${file}`), "utf8");
+    await database.exec(migration.replaceAll("--> statement-breakpoint", ""));
+  }
 });
 
 afterAll(async () => {
@@ -25,7 +27,7 @@ describe("PostgreSQL migration", () => {
     for (const table of [
       "users", "external_identities", "organizations", "organization_members", "properties", "personal_accounts",
       "surveys", "survey_questions", "survey_targets", "survey_participants", "vote_sessions", "votes", "vote_answers",
-      "signature_requests", "documents", "document_versions", "audit_logs", "integration_requests",
+      "vote_autosaves", "signature_requests", "documents", "document_versions", "audit_logs", "integration_requests",
     ]) expect(tables.has(table), `${table} is missing`).toBe(true);
   });
 
@@ -37,7 +39,7 @@ describe("PostgreSQL migration", () => {
       insert into surveys (id, organization_id, protocol_number, title_ru, status) values ('10000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000002', 'T1', 'Test', 'active');
       insert into survey_participants (id, survey_id, user_id, property_id, status, verified_source, verified_at)
         values ('10000000-0000-4000-8000-000000000005', '10000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000003', 'eligible', 'test', now());
-      insert into auth_sessions (id, user_id, assurance_level, expires_at) values ('10000000-0000-4000-8000-000000000006', '10000000-0000-4000-8000-000000000001', 'demo', now() + interval '1 hour');
+      insert into auth_sessions (id, token_hash, user_id, assurance_level, expires_at) values ('10000000-0000-4000-8000-000000000006', 'test-token-hash', '10000000-0000-4000-8000-000000000001', 'demo', now() + interval '1 hour');
       insert into vote_sessions (id, auth_session_id, participant_id, status, idempotency_key, expires_at)
         values ('10000000-0000-4000-8000-000000000007', '10000000-0000-4000-8000-000000000006', '10000000-0000-4000-8000-000000000005', 'submitted', 'idem-1', now() + interval '1 hour'),
                ('10000000-0000-4000-8000-000000000008', '10000000-0000-4000-8000-000000000006', '10000000-0000-4000-8000-000000000005', 'submitted', 'idem-2', now() + interval '1 hour');

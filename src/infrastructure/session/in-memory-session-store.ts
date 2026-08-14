@@ -5,16 +5,16 @@ import type { TrustedSession } from "@/src/domain/session";
 export class InMemorySessionStore implements SessionStore {
   private readonly sessions = new Map<string, TrustedSession>();
 
-  async create(session: TrustedSession): Promise<void> {
-    this.sessions.set(session.sessionId, session);
+  async create(session: TrustedSession, tokenHash: string): Promise<void> {
+    this.sessions.set(tokenHash, session);
   }
 
-  async findById(sessionId: string): Promise<TrustedSession | null> {
-    return this.sessions.get(sessionId) ?? null;
+  async findByTokenHash(tokenHash: string): Promise<TrustedSession | null> {
+    return this.sessions.get(tokenHash) ?? null;
   }
 
-  async revoke(sessionId: string, revokedAt: string): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (session) this.sessions.set(sessionId, { ...session, revokedAt });
+  async revokeByTokenHash(tokenHash: string, revokedAt: string): Promise<void> {
+    const session = this.sessions.get(tokenHash);
+    if (session) this.sessions.set(tokenHash, { ...session, revokedAt });
   }
 }

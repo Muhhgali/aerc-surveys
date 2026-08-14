@@ -32,22 +32,35 @@ export interface VoteRecord {
   userId: string;
   propertyId: string;
   idempotencyKey: string;
+  status: "draft" | "submitted" | "invalidated";
+  stateVersion: number;
+  submittedAt: string | null;
+  accountNumber: string;
+  address: string;
+  unit: string;
+  answers: readonly { questionId: string; choice: VoteChoice }[];
 }
 
-export interface SubmitVoteRecord {
+export interface StartOrResumeVoteRecord {
   authSessionId: string;
   participant: EligibleParticipant;
   idempotencyKey: string;
-  answers: readonly { questionId: string; choice: VoteChoice }[];
   requestId: string;
+}
+
+export interface StartOrResumeVoteResult {
+  vote: VoteRecord;
+  disposition: "started" | "resumed" | "completed";
 }
 
 export interface VotingRepository {
   getSurvey(surveyId: string): Promise<SurveyVotingState | null>;
   getParticipant(surveyId: string, userId: string, propertyId: string): Promise<EligibleParticipant | null>;
-  findByIdempotencyKey(idempotencyKey: string): Promise<VoteRecord | null>;
-  submit(record: SubmitVoteRecord): Promise<VoteRecord>;
   findOwnedVote(voteId: string, userId: string): Promise<VoteRecord | null>;
+  findForUserSurvey(surveyId: string, userId: string): Promise<VoteRecord | null>;
+  startOrResume(record: StartOrResumeVoteRecord): Promise<StartOrResumeVoteResult>;
+  saveAnswer(record: { voteId: string; userId: string; questionId: string; choice: VoteChoice; idempotencyKey: string; payloadSha256: string; requestId: string }): Promise<VoteRecord>;
+  submitDraft(record: { voteId: string; userId: string; authSessionId: string; idempotencyKey: string; requestId: string }): Promise<VoteRecord>;
 }
 
 export interface OrganizationMembershipRepository {

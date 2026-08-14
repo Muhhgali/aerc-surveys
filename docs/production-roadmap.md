@@ -1,49 +1,28 @@
 # Production roadmap
 
-## Этап 0 — выполненный фундамент
+## Завершённые этапы
 
-- одобренное демо сохранено тегом `demo-approved`;
-- введены domain/application/infrastructure boundaries;
-- добавлены provider ports, mock adapters, typed errors, request IDs, timeout/log/retry runtime;
-- добавлена fail-closed env-конфигурация и server session contract;
-- business state удалён из localStorage;
-- зафиксированы аудит, security gaps и интеграционные вопросы.
+- Demo: утверждённый UI сохранён в `demo-approved`.
+- Foundation: domain/application/infrastructure boundaries, provider ports, fail-closed configuration и ADR.
+- Stage 2: PostgreSQL schema, repositories, property/eligibility resolution и базовый voting backend.
+- Stage 2.5: persistent PostgreSQL runtime, hash-based server sessions, full Protocol №12 UI integration, start/resume, per-answer autosave, transactional idempotent submit, health/smoke commands и Playwright security smoke.
 
-## Этап 1 — backend data model (выполнено в текущей ветке)
+## Stage 3 — следующий, но не начат
 
-- добавлены PostgreSQL schema, migration и development seed;
-- добавлены users/external identities/organizations/property read model/survey participants/votes/signatures/documents/audit;
-- добавлены database и server validation для one-person/one-property/one-survey vote;
-- добавлены strict Zod server endpoints, database session adapter и application services;
-- mock account 1911 перенесён из UI в `MockPropertyProvider` с явной identity/property relation;
-- добавлены application и PostgreSQL constraint tests.
+- формальная vote state machine для signing lifecycle;
+- deterministic canonical representation и SHA-256;
+- MockSigningProvider lifecycle без выдумывания eGov/Digital ID API;
+- server-side immutable portrait A4 PDF snapshot;
+- document storage, verification page и QR как verification link;
+- tests целостности и запрета изменений после signing.
 
-## Этап 2 — можно выполнить без внешних API
+## До staging/pilot
 
-- выбрать managed PostgreSQL-платформу и настроить production connection/pooling/backups;
-- добавить outbox и фоновые workers;
-- расширить server routes/actions, CSRF/origin validation и rate limiting;
-- разделить `SurveyApp` на route-level UI без визуальной переработки;
-- серверная генерация portrait A4 PDF, hash, verification page и mock object storage;
-- admin RBAC, survey lifecycle и append-only audit;
-- unit/integration/e2e/contract tests, CI, observability, backups;
-- accessibility, localization и browser support acceptance criteria.
+- создать отдельный Supabase staging project и least-privilege runtime role;
+- настроить migrations as release step, backups/PITR, monitoring и alerting;
+- добавить CI gates, CSP/security headers, rate limits и audit retention/export;
+- выполнить restart/restore rehearsal в staging и документировать RTO/RPO;
+- получить официальные API contracts и юридические требования к ЭЦП до production adapters;
+- провести privacy/security/legal review и controlled pilot.
 
-## Этап 3 — требуется официальная интеграция
-
-- получить договоры, sandbox, data schemas и security profiles eGov/Digital ID;
-- получить официальный Астана-ЕРЦ API и правила разрешения собственности/представительства;
-- утвердить юридически значимый signing flow, certificate/timestamp/revocation requirements;
-- реализовать адаптеры и contract/conformance tests, не меняя domain/use cases;
-- выполнить privacy/legal/security review и нагрузочные испытания.
-
-## Этап 4 — pilot и ввод
-
-- миграция/сверка данных, controlled pilot, support и incident runbooks;
-- disaster recovery rehearsal, monitoring/SLO, audit export;
-- staged rollout с явными feature flags и rollback plan;
-- production readiness review и формальное разрешение на переключение провайдеров.
-
-## Следующее решение
-
-Следующий этап не запускается автоматически. Сначала требуется выбрать database/session infrastructure и утвердить внутреннюю модель survey/version/vote, а также владельцев security и юридических требований.
+Stage 3 не запускается автоматически: сначала владелец принимает Stage 2.5 и предоставляет/утверждает staging infrastructure.

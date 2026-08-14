@@ -16,6 +16,16 @@ import { VotingSheet } from "./voting-sheet";
 
 type Screen = "login" | "verify" | "dashboard" | "archive" | "archiveDocument" | "intro" | "preview" | "account" | "vote" | "review" | "sign" | "success" | "document";
 type AuthMethod = "Digital ID" | "eGov";
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+type VoteApiDto = {
+  id: string;
+  surveyId: string;
+  status: "draft" | "submitted";
+  stateVersion: number;
+  submittedAt: string | null;
+  answers: { questionId: string; choice: "for" | "against" | "abstain" }[];
+  account: { accountNumber: string; address: string; unit: string };
+};
 
 // Browser storage is intentionally limited to harmless UI navigation preferences.
 // Identity, eligibility, answers, signatures, and submissions must be server-owned.
@@ -52,6 +62,7 @@ export default function SurveyApp() {
   const [emailMode, setEmailMode] = useState(false);
   const [account, setAccount] = useState("");
   const [accountStatus, setAccountStatus] = useState<"idle" | "loading" | "found" | "error">("idle");
+  const [accountDetails, setAccountDetails] = useState<{ address: string; unit: string } | null>(null);
   const [selectedSurveyId, setSelectedSurveyId] = useState(surveys[0].id);
   const [selectedArchiveId, setSelectedArchiveId] = useState(archivedSheets[0].id);
   const [answers, setAnswers] = useState<(Answer | null)[]>(defaultAnswers(surveys[0]));
@@ -62,6 +73,9 @@ export default function SurveyApp() {
   const [toast, setToast] = useState("");
   const [submittedAt, setSubmittedAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "anonymous">("checking");
+  const [activeVoteId, setActiveVoteId] = useState("");
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const idempotencyKey = useRef("");
   const [hydrated, setHydrated] = useState(false);
   const selectedSurvey = surveys.find((survey) => survey.id === selectedSurveyId) || surveys[0];
@@ -103,6 +117,38 @@ export default function SurveyApp() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ screen, selectedSurveyId, selectedArchiveId }));
   }, [screen, selectedSurveyId, selectedArchiveId, hydrated]);
   useEffect(() => {
+    if (!hydrated) return;
+    void fetch("/api/session", { cache: "no-store" }).then((response) => {
+      if (response.ok) { setAuthStatus("authenticated"); return; }
+      setAuthStatus("anonymous");
+      if (!(["login", "verify"] as Screen[]).includes(screen)) {
+        setScreen("login"); window.history.replaceState({}, "", "/login");
+      }
+    }).catch(() => {
+      setAuthStatus("anonymous"); setScreen("login"); window.history.replaceState({}, "", "/login");
+    });
+  }, [hydrated, screen]);
+  useEffect(() => {
+    if (authStatus !== "authenticated" || activeVoteId || !selectedSurvey.backendId || !(["vote", "review", "sign"] as Screen[]).includes(screen)) return;
+    void fetch(`/api/surveys/${selectedSurvey.backendId}/votes`, { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) {
+        if (response.status === 404) { setScreen("account"); window.history.replaceState({}, "", pathFor("account", selectedSurveyId, selectedArchiveId)); }
+        return;
+      }
+      const { vote } = await response.json() as { vote: VoteApiDto };
+      const restored = questions.map((question) => {
+        const choice = vote.answers.find((answer) => answer.questionId === question.id)?.choice;
+        return choice === "for" ? "За" : choice === "against" ? "Против" : choice === "abstain" ? "Воздержусь" : null;
+      }) satisfies (Answer | null)[];
+      setActiveVoteId(vote.id); setAnswers(restored); setAccount(vote.account.accountNumber);
+      setAccountDetails({ address: vote.account.address, unit: vote.account.unit }); setAccountStatus("found"); setSaveStatus("saved");
+      if (vote.status === "submitted") {
+        setSubmittedAt(vote.submittedAt ? new Date(vote.submittedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "");
+        setScreen("success"); window.history.replaceState({}, "", pathFor("success", selectedSurveyId, selectedArchiveId));
+      }
+    }).catch(() => setToast("Не удалось восстановить черновик"));
+  }, [authStatus, activeVoteId, questions, screen, selectedArchiveId, selectedSurvey.backendId, selectedSurveyId]);
+  useEffect(() => {
     const pop = () => { const route = routeFromPath(window.location.pathname); if (route) { setScreen(route.screen); if (route.surveyId) setSelectedSurveyId(route.surveyId); if (route.archiveId) setSelectedArchiveId(route.archiveId); } };
     window.addEventListener("popstate", pop); return () => window.removeEventListener("popstate", pop);
   }, []);
@@ -120,7 +166,7 @@ export default function SurveyApp() {
   const openSurvey = (surveyId: string, next: "intro" | "preview") => {
     const survey = surveys.find((item) => item.id === surveyId) || surveys[0];
     idempotencyKey.current = "";
-    setSelectedSurveyId(survey.id); setAnswers(defaultAnswers(survey)); setSignature(""); setSubmittedAt(""); setQuestionIndex(0); setScreen(next);
+    setActiveVoteId(""); setSaveStatus("idle"); setAccountDetails(null); setSelectedSurveyId(survey.id); setAnswers(defaultAnswers(survey)); setSignature(""); setSubmittedAt(""); setQuestionIndex(0); setScreen(next);
     window.scrollTo({ top: 0, behavior: "smooth" }); window.history.pushState({}, "", pathFor(next, survey.id, selectedArchiveId));
   };
   const openArchive = (archiveId: string) => {
@@ -136,6 +182,8 @@ export default function SurveyApp() {
         body: JSON.stringify({ accountReference: account.trim() }),
       });
       if (!response.ok) throw new Error("Account resolution failed");
+      const data = await response.json() as { account: { accountNumber: string; address: string; unit: string } };
+      setAccount(data.account.accountNumber); setAccountDetails({ address: data.account.address, unit: data.account.unit });
       setAccountStatus("found");
       setToast("Объект успешно подтверждён");
     } catch {
@@ -144,37 +192,69 @@ export default function SurveyApp() {
   };
   const logout = async () => {
     await fetch("/api/session", { method: "DELETE" }).catch(() => undefined);
-    localStorage.removeItem(STORAGE_KEY); setSelectedSurveyId(surveys[0].id); setAnswers(defaultAnswers(surveys[0])); setAccount(""); setSignature(""); setSubmittedAt(""); setAccountStatus("idle"); go("login", true);
+    localStorage.removeItem(STORAGE_KEY); setAuthStatus("anonymous"); setActiveVoteId(""); setSelectedSurveyId(surveys[0].id); setAnswers(defaultAnswers(surveys[0])); setAccount(""); setAccountDetails(null); setSignature(""); setSubmittedAt(""); setAccountStatus("idle"); go("login", true);
   };
   const completeAuthentication = async () => {
-    if (process.env.NODE_ENV === "development") {
-      const response = await fetch("/api/dev/session", { method: "POST" });
-      if (!response.ok) {
-        setToast("Сначала примените миграции и development seed");
-        return;
-      }
+    const response = await fetch("/api/dev/session", { method: "POST" });
+    if (!response.ok) {
+      setToast("Mock-вход недоступен: проверьте environment и development seed");
+      return;
     }
+    setAuthStatus("authenticated");
     setToast("Добро пожаловать!");
     go("dashboard");
   };
   const completed = answers.filter(Boolean).length;
+  const startVoting = async () => {
+    if (!selectedSurvey.backendId) { setToast("Опрос ещё не опубликован в backend"); return; }
+    setSubmitting(true);
+    try {
+      const response = await fetch(`/api/surveys/${selectedSurvey.backendId}/votes`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ accountReference: account, idempotencyKey: crypto.randomUUID() }),
+      });
+      if (!response.ok) throw new Error("Vote start failed");
+      const { vote } = await response.json() as { vote: VoteApiDto };
+      setActiveVoteId(vote.id); setAccount(vote.account.accountNumber); setAccountDetails({ address: vote.account.address, unit: vote.account.unit });
+      setAnswers(questions.map((question) => {
+        const choice = vote.answers.find((answer) => answer.questionId === question.id)?.choice;
+        return choice === "for" ? "За" : choice === "against" ? "Против" : choice === "abstain" ? "Воздержусь" : null;
+      }));
+      setSaveStatus(vote.answers.length ? "saved" : "idle");
+      if (vote.status === "submitted") { setSubmittedAt(vote.submittedAt ? new Date(vote.submittedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : ""); go("success"); }
+      else { setQuestionIndex(0); go("vote"); }
+    } catch { setToast("Не удалось создать или восстановить голосование"); }
+    finally { setSubmitting(false); }
+  };
+  const saveAnswer = async (index: number, answer: Answer) => {
+    if (!activeVoteId || !questions[index].id || saveStatus === "saving") return;
+    const previous = answers[index];
+    const next = [...answers]; next[index] = answer; setAnswers(next); setSaveStatus("saving");
+    const choices = { "За": "for", "Против": "against", "Воздержусь": "abstain" } as const;
+    try {
+      const response = await fetch(`/api/votes/${activeVoteId}/answers`, {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ idempotencyKey: crypto.randomUUID(), questionId: questions[index].id, choice: choices[answer] }),
+      });
+      if (!response.ok) throw new Error("Autosave failed");
+      setSaveStatus("saved");
+    } catch {
+      const rollback = [...next]; rollback[index] = previous; setAnswers(rollback); setSaveStatus("error");
+      setToast("Ответ не сохранён. Повторите выбор");
+    }
+  };
   const submitVote = async () => {
-    if (!selectedSurvey.backendId || questions.some((question) => !question.id)) {
-      setToast("Этот опрос пока не опубликован в backend");
+    if (!activeVoteId) {
+      setToast("Черновик голосования не найден");
       return;
     }
     setSubmitting(true);
     idempotencyKey.current ||= crypto.randomUUID();
-    const choices = { "За": "for", "Против": "against", "Воздержусь": "abstain" } as const;
     try {
-      const response = await fetch(`/api/surveys/${selectedSurvey.backendId}/votes`, {
+      const response = await fetch(`/api/votes/${activeVoteId}/submit`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          accountReference: account,
-          idempotencyKey: idempotencyKey.current,
-          answers: answers.map((answer, index) => ({ questionId: questions[index].id, choice: choices[answer!] })),
-        }),
+        body: JSON.stringify({ idempotencyKey: idempotencyKey.current }),
       });
       if (!response.ok) throw new Error("Vote submission failed");
       setConfirmOpen(false);
@@ -224,7 +304,7 @@ export default function SurveyApp() {
 
   const Intro = () => <><AppHeader onBack={() => go("dashboard")} /><main className="screen-content intro-content"><StepDots step={1} /><div className="document-illustration"><FileText size={48} /><span><Check size={16} /></span></div><span className="eyebrow">ПРОТОКОЛ №{selectedSurvey.protocol}</span><h1>{selectedSurvey.title}</h1><p className="lead">{selectedSurvey.subtitle}</p>
     <section className="info-card"><div><ClipboardCheck size={19} /><span><small>Количество</small><strong>{questions.length} вопросов</strong></span></div><div><Clock3 size={19} /><span><small>Время</small><strong>{selectedSurvey.duration}</strong></span></div><div><CalendarDays size={19} /><span><small>Срок голосования</small><strong>{selectedSurvey.deadlineShort}</strong></span></div></section>
-    <div className="notice"><ShieldCheck size={19} /><span>Ваш голос будет зафиксирован после подтверждения рукописной подписью.</span></div><button className="button button-secondary button-full preview-link" onClick={() => go("preview")}><FileText size={18} /> Посмотреть все вопросы</button><button className="button button-primary button-full" onClick={() => go("account")}>Начать <ArrowRight size={18} /></button>
+    <div className="notice"><ShieldCheck size={19} /><span>Ваш голос будет зафиксирован сервером после финального подтверждения. Визуальная подпись пока не является ЭЦП.</span></div><button className="button button-secondary button-full preview-link" onClick={() => go("preview")}><FileText size={18} /> Посмотреть все вопросы</button><button className="button button-primary button-full" onClick={() => go("account")}>Начать <ArrowRight size={18} /></button>
   </main></>;
 
   const Preview = () => <><AppHeader title="Просмотр опроса" onBack={() => go("dashboard")} /><main className="screen-content preview-content">
@@ -241,29 +321,29 @@ export default function SurveyApp() {
     <span className="field-help">Для демонстрации используйте счёт <button onClick={() => setAccount("1911")}>1911</button></span><button className="button button-primary button-full" disabled={!account || accountStatus === "loading" || accountStatus === "found"} onClick={findAccount}>{accountStatus === "loading" ? <><span className="button-loader" /> Ищем объект...</> : <><Search size={18} /> Найти объект</>}</button>
     {accountStatus === "loading" && <div className="object-skeleton" aria-label="Загрузка данных объекта"><span /><span /><span /><span /></div>}
     {accountStatus === "error" && <div className="error-card"><CircleAlert size={20} /><div><strong>Лицевой счёт не найден</strong><p>Для демонстрации используйте 1911.</p></div></div>}
-    {accountStatus === "found" && <section className="object-card"><div className="object-head"><span><Check size={20} /></span><div><small>ЛИЦЕВОЙ СЧЁТ НАЙДЕН</small><strong>Данные подтверждены</strong></div></div><div className="object-address"><MapPin size={19} /><div><small>Адрес объекта</small><strong>г. Астана, ул. Геодезическая, д. 12</strong></div></div><div className="object-grid"><div><small>Квартира</small><strong>52</strong></div><div><small>Тип помещения</small><strong>Квартира</strong></div></div><button className="button button-primary button-full" onClick={() => { setQuestionIndex(0); go("vote"); }}>Перейти к голосованию <ArrowRight size={18} /></button></section>}
+    {accountStatus === "found" && <section className="object-card"><div className="object-head"><span><Check size={20} /></span><div><small>ЛИЦЕВОЙ СЧЁТ НАЙДЕН</small><strong>Данные подтверждены</strong></div></div><div className="object-address"><MapPin size={19} /><div><small>Адрес объекта</small><strong>{accountDetails?.address || "г. Астана, ул. Геодезическая, д. 12"}</strong></div></div><div className="object-grid"><div><small>Квартира</small><strong>{accountDetails?.unit || "52"}</strong></div><div><small>Тип помещения</small><strong>Квартира</strong></div></div><button className="button button-primary button-full" disabled={submitting} onClick={startVoting}>{submitting ? "Открываем голосование..." : "Перейти к голосованию"} <ArrowRight size={18} /></button></section>}
   </main></>;
 
   const VoteScreen = () => { const current = questions[questionIndex]; return <><AppHeader title="Голосование" onBack={() => questionIndex > 0 ? setQuestionIndex(questionIndex - 1) : go("account")} action={<span className="nav-counter">{questionIndex + 1}/{questions.length}</span>} /><main className="screen-content vote-content">
-    <div className="progress-label"><span>Вопрос {questionIndex + 1} из {questions.length}</span><strong>{Math.round(((questionIndex + 1) / questions.length) * 100)}%</strong></div><div className="progress-track"><span style={{ width: `${((questionIndex + 1) / questions.length) * 100}%` }} /></div><div className="question-number">{String(questionIndex + 1).padStart(2, "0")}</div><span className="eyebrow">{current.short.toUpperCase()}</span><h1>{current.text}</h1><p className="choice-label">Выберите один вариант ответа</p>
-    <div className="answer-list">{(["За", "Против", "Воздержусь"] as Answer[]).map((answer) => <button className={`answer-card ${answers[questionIndex] === answer ? "selected" : ""}`} key={answer} onClick={() => { const next = [...answers]; next[questionIndex] = answer; setAnswers(next); }}><span className="radio-mark">{answers[questionIndex] === answer && <Check size={15} />}</span><span><strong>{answer}</strong><small>{answer === "За" ? "Поддерживаю предложение" : answer === "Против" ? "Не поддерживаю предложение" : "Не принимаю сторону"}</small></span></button>)}</div>
-    <div className="vote-navigation"><button className="button button-secondary" onClick={() => questionIndex > 0 ? setQuestionIndex(questionIndex - 1) : go("account")}><ArrowLeft size={18} /> Назад</button><button className="button button-primary" disabled={!answers[questionIndex]} onClick={() => questionIndex === questions.length - 1 ? go("review") : setQuestionIndex(questionIndex + 1)}>{questionIndex === questions.length - 1 ? "Проверить" : "Далее"} <ArrowRight size={18} /></button></div>
+    <div className="progress-label"><span>Вопрос {questionIndex + 1} из {questions.length}</span><strong>{Math.round(((questionIndex + 1) / questions.length) * 100)}%</strong></div><div className="progress-track"><span style={{ width: `${((questionIndex + 1) / questions.length) * 100}%` }} /></div><div className="question-number">{String(questionIndex + 1).padStart(2, "0")}</div><span className="eyebrow">{current.short.toUpperCase()}</span><h1>{current.text}</h1><p className="choice-label">Выберите один вариант ответа <span aria-live="polite" data-testid="save-status">{saveStatus === "saving" ? "· Сохранение..." : saveStatus === "saved" ? "· Сохранено" : saveStatus === "error" ? "· Ошибка сохранения" : ""}</span></p>
+    <div className="answer-list">{(["За", "Против", "Воздержусь"] as Answer[]).map((answer) => <button className={`answer-card ${answers[questionIndex] === answer ? "selected" : ""}`} disabled={saveStatus === "saving"} key={answer} onClick={() => void saveAnswer(questionIndex, answer)}><span className="radio-mark">{answers[questionIndex] === answer && <Check size={15} />}</span><span><strong>{answer}</strong><small>{answer === "За" ? "Поддерживаю предложение" : answer === "Против" ? "Не поддерживаю предложение" : "Не принимаю сторону"}</small></span></button>)}</div>
+    <div className="vote-navigation"><button className="button button-secondary" disabled={saveStatus === "saving"} onClick={() => questionIndex > 0 ? setQuestionIndex(questionIndex - 1) : go("account")}><ArrowLeft size={18} /> Назад</button><button className="button button-primary" disabled={!answers[questionIndex] || saveStatus === "saving"} onClick={() => questionIndex === questions.length - 1 ? go("review") : setQuestionIndex(questionIndex + 1)}>{questionIndex === questions.length - 1 ? "Проверить" : "Далее"} <ArrowRight size={18} /></button></div>
   </main></>; };
 
   const Review = () => <><AppHeader title="Проверка" onBack={() => { setQuestionIndex(questions.length - 1); go("vote"); }} /><main className="screen-content review-content"><StepDots step={3} /><div className="page-icon success-soft"><ClipboardCheck size={27} /></div><h1>Проверьте ответы</h1><p className="lead">При необходимости вернитесь к вопросу и измените выбор</p>
     <div className="review-list">{questions.map((question, index) => <button key={question.short} onClick={() => { setQuestionIndex(index); go("vote"); }}><span className="review-number">{index + 1}</span><span className="review-copy"><strong>{question.short}</strong><small>{question.text}</small></span><span className={`answer-pill ${answers[index] === "За" ? "yes" : answers[index] === "Против" ? "no" : "neutral"}`}>{answers[index] || "Не выбран"}</span><ChevronRight size={17} /></button>)}</div>
-    <div className="completion-note"><CheckCircle2 size={18} /><strong>{completed} из {questions.length} вопросов заполнено</strong></div><button className="button button-primary button-full" disabled={completed !== questions.length} onClick={() => go("sign")}><PenLine size={18} /> Подписать голосование</button>
+    <div className="completion-note"><CheckCircle2 size={18} /><strong>{completed} из {questions.length} вопросов заполнено</strong></div><button className="button button-primary button-full" disabled={completed !== questions.length || saveStatus === "saving"} onClick={() => go("sign")}><PenLine size={18} /> Перейти к подтверждению</button>
   </main></>;
 
-  const Sign = () => <><AppHeader title="Подписание" onBack={() => go("review")} /><main className="screen-content sign-content"><StepDots step={4} /><div className="page-icon"><PenLine size={27} /></div><h1>Подпишите голосование</h1><p className="lead">Одна подпись будет добавлена к каждому выбранному вами ответу</p>
+  const Sign = () => <><AppHeader title="Подтверждение" onBack={() => go("review")} /><main className="screen-content sign-content"><StepDots step={4} /><div className="page-icon"><PenLine size={27} /></div><h1>Подтвердите голосование</h1><p className="lead">Рукописная подпись пока является только визуальным UX-элементом и не является ЭЦП</p>
     <section className="sign-summary"><div><FileText size={20} /><span><small>Документ</small><strong>Протокол №{selectedSurvey.protocol} · {questions.length} ответов</strong></span></div><div><MapPin size={20} /><span><small>Объект</small><strong>ул. Геодезическая, 12, кв. 52</strong></span></div></section>
     <section className={`signature-preview ${signature ? "has-signature" : ""}`}>{signature ? <img src={signature} alt="Ваша подпись" /> : <><div className="dashed-pen"><PenLine size={29} /></div><strong>Подпись ещё не добавлена</strong><small>Нажмите кнопку ниже и распишитесь пальцем</small></>}</section>
-    <button className={`button button-full ${signature ? "button-secondary" : "button-primary"}`} onClick={() => setSignatureOpen(true)}>{signature ? <><RotateCcw size={18} /> Перерисовать подпись</> : <><PenLine size={18} /> Поставить подпись</>}</button><div className="legal-note"><LockKeyhole size={16} /><span>Нажимая «Подписать и отправить», вы подтверждаете достоверность выбранных ответов.</span></div><button className="button button-primary button-full" disabled={!signature} onClick={() => setConfirmOpen(true)}><Send size={18} /> Подписать и отправить</button>
-  </main>{signatureOpen && <SignaturePad onCancel={() => setSignatureOpen(false)} onSave={(value) => { setSignature(value); setSignatureOpen(false); setToast("Подпись сохранена"); }} />}{confirmOpen && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="confirm-modal"><div className="modal-icon"><ShieldCheck size={26} /></div><h2>Подтверждение</h2><p>Вы ответили на все вопросы. После отправки ответы будут зафиксированы в листе голосования.</p><div className="modal-summary"><span>Протокол №{selectedSurvey.protocol}</span><strong>{questions.length} ответов · подпись добавлена</strong></div><button className="button button-primary button-full" disabled={submitting} onClick={submitVote}>{submitting ? "Отправляем..." : "Отправить голосование"} <Send size={18} /></button><button className="button button-ghost button-full" disabled={submitting} onClick={() => setConfirmOpen(false)}>Отмена</button></div></div>}</>;
+    <button className={`button button-full ${signature ? "button-secondary" : "button-primary"}`} onClick={() => setSignatureOpen(true)}>{signature ? <><RotateCcw size={18} /> Перерисовать подпись</> : <><PenLine size={18} /> Добавить визуальную подпись</>}</button><div className="legal-note"><LockKeyhole size={16} /><span>Юридический signing lifecycle будет подключён отдельным этапом. Сейчас сервер фиксирует только ответы.</span></div><button className="button button-primary button-full" disabled={!signature} onClick={() => setConfirmOpen(true)}><Send size={18} /> Подтвердить и отправить</button>
+  </main>{signatureOpen && <SignaturePad onCancel={() => setSignatureOpen(false)} onSave={(value) => { setSignature(value); setSignatureOpen(false); setToast("Визуальная подпись добавлена"); }} />}{confirmOpen && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="confirm-modal"><div className="modal-icon"><ShieldCheck size={26} /></div><h2>Подтверждение</h2><p>Вы ответили на все вопросы. Сервер повторно проверит полноту и право голоса.</p><div className="modal-summary"><span>Протокол №{selectedSurvey.protocol}</span><strong>{questions.length} ответов</strong></div><button className="button button-primary button-full" disabled={submitting} onClick={submitVote}>{submitting ? "Отправляем..." : "Отправить голосование"} <Send size={18} /></button><button className="button button-ghost button-full" disabled={submitting} onClick={() => setConfirmOpen(false)}>Отмена</button></div></div>}</>;
 
   const Success = () => <><AppHeader /><main className="screen-content success-content"><div className="success-animation"><span /><div><Check size={45} /></div><i /><i /><i /><i /></div><span className="eyebrow success-eyebrow">ГОЛОСОВАНИЕ ЗАВЕРШЕНО</span><h1>Голос принят</h1><p className="lead">Ваше голосование успешно зарегистрировано.</p>
-    <section className="receipt-card"><div className="receipt-row"><span><CalendarDays size={18} /> Дата и время</span><strong>20 августа 2026 · {submittedAt || "14:32"}</strong></div><div className="receipt-row"><span><Hash size={18} /> ID документа</span><strong className="document-id">{documentId}</strong></div><div className="receipt-row"><span><ShieldCheck size={18} /> Статус</span><strong className="green-text">Подписано и принято</strong></div></section>
-    <div className="success-actions"><button className="button button-primary button-full" onClick={() => go("document")}><FileText size={18} /> Открыть PDF</button><button className="button button-secondary button-full" onClick={() => go("dashboard")}><Home size={18} /> На главную</button></div><p className="receipt-hint">Электронный лист голосования сохранён в вашем профиле</p>
+    <section className="receipt-card"><div className="receipt-row"><span><CalendarDays size={18} /> Дата и время</span><strong>20 августа 2026 · {submittedAt || "14:32"}</strong></div><div className="receipt-row"><span><Hash size={18} /> ID голосования</span><strong className="document-id">{activeVoteId || documentId}</strong></div><div className="receipt-row"><span><ShieldCheck size={18} /> Статус</span><strong className="green-text">Отправлено и принято</strong></div></section>
+    <div className="success-actions"><button className="button button-primary button-full" onClick={() => go("document")}><FileText size={18} /> Открыть демонстрационный лист</button><button className="button button-secondary button-full" onClick={() => go("dashboard")}><Home size={18} /> На главную</button></div><p className="receipt-hint">Ответы и итоговый статус сохранены в PostgreSQL. PDF и ЭЦП относятся к следующему этапу.</p>
   </main></>;
 
   const Document = () => <VotingSheet onBack={() => go("success")} protocol={selectedSurvey.protocol} title={selectedSurvey.title} date="20.08.2026" time={submittedAt || "14:32"} documentId={documentId} address="г. Астана, ул. Геодезическая, д. 12" account="1911" apartment="52" questions={questions} answers={answers} signature={signature} />;
@@ -272,7 +352,7 @@ export default function SurveyApp() {
   const content = () => {
     switch (screen) { case "login": return <Login />; case "verify": return <Verify />; case "dashboard": return <Dashboard />; case "archive": return <ArchiveView />; case "archiveDocument": return <ArchiveDocument />; case "intro": return <Intro />; case "preview": return <Preview />; case "account": return <Account />; case "vote": return <VoteScreen />; case "review": return <Review />; case "sign": return <Sign />; case "success": return <Success />; case "document": return <Document />; }
   };
-  if (!hydrated) return <div className="app-loading"><Brand /><span className="loader-ring" /></div>;
+  if (!hydrated || authStatus === "checking") return <div className="app-loading"><Brand /><span className="loader-ring" /></div>;
   if (screen === "document" || screen === "archiveDocument") return <div className="presentation document-presentation">{content()}{toast && <div className="toast"><CheckCircle2 size={18} />{toast}</div>}</div>;
   return <div className="presentation"><aside className="presentation-copy"><Brand /><div className="presentation-main"><span className="presentation-tag"><ShieldCheck size={15} /> ЦИФРОВОЙ СЕРВИС</span><h2>Голосовать удобно.<br />Решать — вместе.</h2><p>Безопасный и прозрачный способ участия собственников в управлении своим домом.</p><div className="presentation-points"><span><Check size={15} /> Подтверждение личности</span><span><Check size={15} /> Электронный документ</span><span><Check size={15} /> Рукописная подпись</span></div></div><div className="presentation-footer">ТОО «Астана-ЕРЦ» · 2026</div></aside><div className="phone-stage"><div className={`phone-shell screen-${screen}`}>{content()}</div><p className="desktop-caption">Интерактивный демонстрационный прототип</p></div>{toast && <div className="toast"><CheckCircle2 size={18} />{toast}</div>}</div>;
 }

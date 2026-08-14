@@ -125,4 +125,4 @@ export const archivedSheets: ArchivedSheet[] = [
 ];
 
 export const defaultAnswers = (survey: Survey): (Answer | null)[] =>
-  survey.id === "12" ? ["За", "Против", "За", "За", "Воздержусь", "За"] : survey.questions.map(() => null);
+  survey.questions.map(() => null);

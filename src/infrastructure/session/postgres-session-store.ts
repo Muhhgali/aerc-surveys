@@ -7,14 +7,14 @@ import type { DatabaseClient } from "@/src/infrastructure/database/client";
 export class PostgresSessionStore implements SessionStore {
   constructor(private readonly sql: DatabaseClient) {}
 
-  async create(session: TrustedSession): Promise<void> {
+  async create(session: TrustedSession, tokenHash: string): Promise<void> {
     await this.sql`
-      insert into auth_sessions (id, user_id, assurance_level, created_at, expires_at, revoked_at)
-      values (${session.sessionId}, ${session.subjectId}, ${session.assuranceLevel}, ${session.createdAt}, ${session.expiresAt}, ${session.revokedAt ?? null})
+      insert into auth_sessions (id, token_hash, user_id, assurance_level, created_at, expires_at, revoked_at)
+      values (${session.sessionId}, ${tokenHash}, ${session.subjectId}, ${session.assuranceLevel}, ${session.createdAt}, ${session.expiresAt}, ${session.revokedAt ?? null})
     `;
   }
 
-  async findById(sessionId: string): Promise<TrustedSession | null> {
+  async findByTokenHash(tokenHash: string): Promise<TrustedSession | null> {
     const rows = await this.sql<{
       sessionId: string;
       subjectId: string;
@@ -25,7 +25,7 @@ export class PostgresSessionStore implements SessionStore {
     }[]>`
       select id as "sessionId", user_id as "subjectId", assurance_level as "assuranceLevel",
              created_at as "createdAt", expires_at as "expiresAt", revoked_at as "revokedAt"
-      from auth_sessions where id = ${sessionId} limit 1
+      from auth_sessions where token_hash = ${tokenHash} limit 1
     `;
     const row = rows[0];
     if (!row) return null;
@@ -39,7 +39,7 @@ export class PostgresSessionStore implements SessionStore {
     };
   }
 
-  async revoke(sessionId: string, revokedAt: string): Promise<void> {
-    await this.sql`update auth_sessions set revoked_at = ${revokedAt} where id = ${sessionId}`;
+  async revokeByTokenHash(tokenHash: string, revokedAt: string): Promise<void> {
+    await this.sql`update auth_sessions set revoked_at = ${revokedAt} where token_hash = ${tokenHash}`;
   }
 }

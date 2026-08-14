@@ -9,9 +9,14 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:e2e": "npm run build && tsx scripts/run-e2e.ts",
+    "test:restart": "npm run build && tsx scripts/restart-smoke.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:seed": "tsx scripts/seed.ts"
+    "db:seed": "tsx scripts/seed.ts",
+    "db:check": "tsx scripts/db-check.ts",
+    "db:smoke": "tsx scripts/db-smoke.ts",
+    "db:reset:development": "tsx scripts/reset-development.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
@@ -24,6 +29,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.5",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

@@ -5,6 +5,8 @@ export type ApplicationErrorCode =
   | "closed_survey"
   | "unauthorized_property"
   | "invalid_answers"
+  | "invalid_vote_state"
+  | "idempotency_conflict"
   | "duplicate_vote"
   | "not_found";
 

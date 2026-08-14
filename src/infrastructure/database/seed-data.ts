@@ -8,7 +8,6 @@ export const seedIds = {
   personalAccount: "00000000-0000-4000-8000-000000000301",
   survey12: "00000000-0000-4000-8000-000000000012",
   participant: "00000000-0000-4000-8000-000000000401",
-  authSession: "00000000-0000-4000-8000-000000000501",
   questions: [1, 2, 3, 4, 5, 6].map((number) => `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`),
 } as const;
 
@@ -81,11 +80,6 @@ export async function seedDevelopmentData(sql: DatabaseClient): Promise<void> {
       values (${seedIds.participant}, ${seedIds.survey12}, ${seedIds.voterUser}, ${seedIds.property}, ${seedIds.personalAccount},
               'eligible', 'mock', now(), ${transaction.json({ verified: true, developmentSeed: true })})
       on conflict (id) do update set status = 'eligible', verified_at = now(), updated_at = now()
-    `;
-    await transaction`
-      insert into auth_sessions (id, user_id, assurance_level, expires_at)
-      values (${seedIds.authSession}, ${seedIds.voterUser}, 'demo', '2099-01-01T00:00:00Z')
-      on conflict (id) do update set user_id = excluded.user_id, expires_at = excluded.expires_at, revoked_at = null
     `;
   });
 }

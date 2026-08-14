@@ -185,6 +185,7 @@ export const surveyParticipants = pgTable("survey_participants", {
 
 export const authSessions = pgTable("auth_sessions", {
   id: uuid("id").primaryKey(),
+  tokenHash: text("token_hash").notNull().unique(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   assuranceLevel: text("assurance_level").notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -212,10 +213,14 @@ export const votes = pgTable("votes", {
   propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "restrict" }),
   status: voteStatus("status").notNull().default("draft"),
   idempotencyKey: text("idempotency_key").notNull().unique(),
+  submitIdempotencyKey: text("submit_idempotency_key").unique(),
+  stateVersion: integer("state_version").notNull().default(1),
   submittedAt: timestamp("submitted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("votes_one_final_vote_unique").on(table.surveyId, table.userId, table.propertyId).where(sql`${table.status} = 'submitted'`),
+  uniqueIndex("votes_one_workflow_unique").on(table.surveyId, table.userId, table.propertyId).where(sql`${table.status} <> 'invalidated'`),
   index("votes_participant_idx").on(table.participantId),
 ]);
 
@@ -226,6 +231,15 @@ export const voteAnswers = pgTable("vote_answers", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [primaryKey({ columns: [table.voteId, table.questionId] })]);
+
+export const voteAutosaves = pgTable("vote_autosaves", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  voteId: uuid("vote_id").notNull().references(() => votes.id, { onDelete: "cascade" }),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  payloadSha256: text("payload_sha256").notNull(),
+  stateVersion: integer("state_version").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [index("vote_autosaves_vote_idx").on(table.voteId)]);
 
 export const signatureRequests = pgTable("signature_requests", {
   id: uuid("id").defaultRandom().primaryKey(),
