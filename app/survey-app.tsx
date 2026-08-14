@@ -17,7 +17,9 @@ import { VotingSheet } from "./voting-sheet";
 type Screen = "login" | "verify" | "dashboard" | "archive" | "archiveDocument" | "intro" | "preview" | "account" | "vote" | "review" | "sign" | "success" | "document";
 type AuthMethod = "Digital ID" | "eGov";
 
-const STORAGE_KEY = "aerc-surveys-demo-v1";
+// Browser storage is intentionally limited to harmless UI navigation preferences.
+// Identity, eligibility, answers, signatures, and submissions must be server-owned.
+const STORAGE_KEY = "aerc-surveys-ui-preferences-v1";
 
 const surveySegments: Partial<Record<Screen, string>> = { preview: "preview", account: "account", vote: "vote", review: "review", sign: "sign", success: "success", document: "document" };
 
@@ -70,16 +72,13 @@ export default function SurveyApp() {
       try {
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
-          const state = JSON.parse(saved) as { screen?: Screen; selectedSurveyId?: string; selectedArchiveId?: string; answers?: (Answer | null)[]; account?: string; signature?: string; submittedAt?: string };
+          const state = JSON.parse(saved) as { screen?: Screen; selectedSurveyId?: string; selectedArchiveId?: string };
           const route = routeFromPath(window.location.pathname);
           const surveyId = route?.surveyId || state.selectedSurveyId || surveys[0].id;
           const survey = surveys.find((item) => item.id === surveyId) || surveys[0];
           setSelectedSurveyId(survey.id);
           setSelectedArchiveId(route?.archiveId || state.selectedArchiveId || archivedSheets[0].id);
-          if (state.answers?.length === survey.questions.length) setAnswers(state.answers); else setAnswers(defaultAnswers(survey));
-          if (state.account) setAccount(state.account);
-          if (state.signature) setSignature(state.signature);
-          if (state.submittedAt) setSubmittedAt(state.submittedAt);
+          setAnswers(defaultAnswers(survey));
           const initial = route?.screen || state.screen;
           if (initial) setScreen(initial);
         } else {
@@ -99,8 +98,8 @@ export default function SurveyApp() {
   }, []);
   useEffect(() => {
     if (!hydrated) return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ screen, selectedSurveyId, selectedArchiveId, answers, account, signature, submittedAt }));
-  }, [screen, selectedSurveyId, selectedArchiveId, answers, account, signature, submittedAt, hydrated]);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ screen, selectedSurveyId, selectedArchiveId }));
+  }, [screen, selectedSurveyId, selectedArchiveId, hydrated]);
   useEffect(() => {
     const pop = () => { const route = routeFromPath(window.location.pathname); if (route) { setScreen(route.screen); if (route.surveyId) setSelectedSurveyId(route.surveyId); if (route.archiveId) setSelectedArchiveId(route.archiveId); } };
     window.addEventListener("popstate", pop); return () => window.removeEventListener("popstate", pop);
