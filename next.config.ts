@@ -1,14 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  rewrites() {
-    return [
-      {
-        source: "/:path*",
-        destination: "/",
-      },
-    ];
-  },
+  output: "export",
+  distDir: "dist",
 };
 
 export default nextConfig;
