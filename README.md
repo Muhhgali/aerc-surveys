@@ -12,7 +12,15 @@ copy .env.example .env.local
 npm run dev
 ```
 
-Проверки: `npm run typecheck`, `npm run lint`, `npm run build`.
+Backend setup:
+
+```bash
+npm run db:generate
+npm run db:migrate
+npm run db:seed
+```
+
+`DATABASE_URL` должен указывать на PostgreSQL. Проверки: `npm run typecheck`, `npm run lint`, `npm test`, `npm run build`.
 
 ## Документация
 
@@ -20,6 +28,7 @@ npm run dev
 - [Интеграции](docs/integrations.md)
 - [Модель безопасности](docs/security-model.md)
 - [Production roadmap](docs/production-roadmap.md)
+- [Data model и backend API](docs/data-model.md)
 - [ADR](docs/adr/)
 
 Одобренное демо сохранено git-тегом `demo-approved`. Работы над фундаментом ведутся в ветке `production-foundation`.

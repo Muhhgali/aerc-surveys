@@ -9,6 +9,17 @@ export interface ProviderCallOptions {
   maxRetries: number;
 }
 
+export class ProviderCallError extends Error {
+  constructor(
+    readonly code: ProviderError["code"],
+    message: string,
+    readonly retryable = false,
+  ) {
+    super(message);
+    this.name = "ProviderCallError";
+  }
+}
+
 const wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 export async function executeProviderCall<T>(
@@ -30,15 +41,16 @@ export async function executeProviderCall<T>(
       return { ok: true, value };
     } catch (cause) {
       const timedOut = controller.signal.aborted;
+      const providerError = cause instanceof ProviderCallError ? cause : undefined;
       const error: ProviderError = {
-        code: timedOut ? "timeout" : "unavailable",
-        message: timedOut ? "Provider call timed out" : "Provider call failed",
+        code: timedOut ? "timeout" : providerError?.code ?? "unavailable",
+        message: timedOut ? "Provider call timed out" : providerError?.message ?? "Provider call failed",
         requestId: context.requestId,
-        retryable: true,
+        retryable: timedOut || providerError?.retryable === true || !providerError,
         cause,
       };
       logger.warn("provider.call.failed", { operation: options.operation, requestId: context.requestId, attempt, code: error.code });
-      if (attempt === attempts) return { ok: false, error };
+      if (attempt === attempts || !error.retryable) return { ok: false, error };
       await wait(Math.min(100 * 2 ** (attempt - 1), 1_000));
     } finally {
       clearTimeout(timer);

@@ -9,18 +9,27 @@
 - business state удалён из localStorage;
 - зафиксированы аудит, security gaps и интеграционные вопросы.
 
-## Этап 1 — можно выполнить без внешних API
+## Этап 1 — backend data model (выполнено в текущей ветке)
 
-- выбрать PostgreSQL-платформу и добавить migrations/repositories/transactions;
-- спроектировать versioned survey schema, eligibility snapshot, idempotency и outbox;
-- реализовать server routes/actions, secure cookie session, CSRF/origin validation;
+- добавлены PostgreSQL schema, migration и development seed;
+- добавлены users/external identities/organizations/property read model/survey participants/votes/signatures/documents/audit;
+- добавлены database и server validation для one-person/one-property/one-survey vote;
+- добавлены strict Zod server endpoints, database session adapter и application services;
+- mock account 1911 перенесён из UI в `MockPropertyProvider` с явной identity/property relation;
+- добавлены application и PostgreSQL constraint tests.
+
+## Этап 2 — можно выполнить без внешних API
+
+- выбрать managed PostgreSQL-платформу и настроить production connection/pooling/backups;
+- добавить outbox и фоновые workers;
+- расширить server routes/actions, CSRF/origin validation и rate limiting;
 - разделить `SurveyApp` на route-level UI без визуальной переработки;
 - серверная генерация portrait A4 PDF, hash, verification page и mock object storage;
 - admin RBAC, survey lifecycle и append-only audit;
 - unit/integration/e2e/contract tests, CI, observability, backups;
 - accessibility, localization и browser support acceptance criteria.
 
-## Этап 2 — требуется официальная интеграция
+## Этап 3 — требуется официальная интеграция
 
 - получить договоры, sandbox, data schemas и security profiles eGov/Digital ID;
 - получить официальный Астана-ЕРЦ API и правила разрешения собственности/представительства;
@@ -28,7 +37,7 @@
 - реализовать адаптеры и contract/conformance tests, не меняя domain/use cases;
 - выполнить privacy/legal/security review и нагрузочные испытания.
 
-## Этап 3 — pilot и ввод
+## Этап 4 — pilot и ввод
 
 - миграция/сверка данных, controlled pilot, support и incident runbooks;
 - disaster recovery rehearsal, monitoring/SLO, audit export;

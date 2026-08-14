@@ -8,7 +8,7 @@ import type {
 } from "@/src/application/ports/providers";
 import type { RequestContext } from "@/src/domain/shared";
 import type { StructuredLogger } from "@/src/infrastructure/logging/structured-logger";
-import { executeProviderCall } from "@/src/infrastructure/providers/runtime";
+import { executeProviderCall, ProviderCallError } from "@/src/infrastructure/providers/runtime";
 
 interface MockRuntimeOptions {
   timeoutMs: number;
@@ -52,29 +52,41 @@ export class MockIdentityProvider implements IdentityProvider {
 
 export class MockPropertyProvider implements PropertyProvider {
   readonly name = "mock" as const;
-  constructor(private readonly runtime: MockRuntimeOptions) {}
-
-  resolveAccount(input: { subjectId: string; accountReference: string }, context: RequestContext) {
-    return run(this.runtime, context, "property.resolve", true, () => ({
-      propertyId: `mock-property-${input.accountReference}`,
-      accountId: input.accountReference,
-      address: "г. Астана, ул. Геодезическая, д. 12",
-      unit: "52",
-      ownershipKind: "residential" as const,
-    }));
-  }
-
-  checkVotingEligibility(input: { subjectId: string; propertyId: string; surveyId: string }, context: RequestContext) {
-    return run(this.runtime, context, "property.eligibility", true, () => ({
-      eligible: true,
-      property: {
-        propertyId: input.propertyId,
+  private readonly accounts = new Map([
+    ["1911", {
+      account: {
+        propertyId: "mock-property-geodezicheskaya-12-52",
         accountId: "1911",
+        externalAccountId: "mock-account-1911",
+        source: "mock",
         address: "г. Астана, ул. Геодезическая, д. 12",
         unit: "52",
         ownershipKind: "residential" as const,
       },
-    }));
+      authorizedSubjectIds: new Set(["00000000-0000-4000-8000-000000000001"]),
+    }],
+  ]);
+  constructor(private readonly runtime: MockRuntimeOptions) {}
+
+  resolveAccount(input: { subjectId: string; accountReference: string }, context: RequestContext) {
+    return run(this.runtime, context, "property.resolve", true, () => {
+      const fixture = this.accounts.get(input.accountReference);
+      if (!fixture) throw new ProviderCallError("not_found", "Personal account was not found");
+      if (!fixture.authorizedSubjectIds.has(input.subjectId)) {
+        throw new ProviderCallError("unauthorized", "Identity is not verified for this personal account");
+      }
+      return fixture.account;
+    });
+  }
+
+  checkVotingEligibility(input: { subjectId: string; propertyId: string; surveyId: string }, context: RequestContext) {
+    return run(this.runtime, context, "property.eligibility", true, () => {
+      const fixture = [...this.accounts.values()].find((candidate) => candidate.account.propertyId === input.propertyId);
+      if (!fixture || !fixture.authorizedSubjectIds.has(input.subjectId)) {
+        throw new ProviderCallError("unauthorized", "Identity is not eligible for this property");
+      }
+      return { eligible: true, verified: true, verificationSource: "mock", property: fixture.account };
+    });
   }
 }
 

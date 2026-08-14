@@ -8,7 +8,7 @@ import {
   Fingerprint, Hash, Home, Landmark, LockKeyhole, Mail, MapPin, PenLine,
   RotateCcw, Search, Send, ShieldCheck, UserRoundCheck, Vote, X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppHeader, Brand, StepDots } from "./app-chrome";
 import { SignaturePad } from "./signature-pad";
 import { archivedSheets, defaultAnswers, surveys, type Answer } from "./survey-data";
@@ -61,6 +61,8 @@ export default function SurveyApp() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [submittedAt, setSubmittedAt] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const idempotencyKey = useRef("");
   const [hydrated, setHydrated] = useState(false);
   const selectedSurvey = surveys.find((survey) => survey.id === selectedSurveyId) || surveys[0];
   const selectedArchive = archivedSheets.find((sheet) => sheet.id === selectedArchiveId) || archivedSheets[0];
@@ -117,6 +119,7 @@ export default function SurveyApp() {
   };
   const openSurvey = (surveyId: string, next: "intro" | "preview") => {
     const survey = surveys.find((item) => item.id === surveyId) || surveys[0];
+    idempotencyKey.current = "";
     setSelectedSurveyId(survey.id); setAnswers(defaultAnswers(survey)); setSignature(""); setSubmittedAt(""); setQuestionIndex(0); setScreen(next);
     window.scrollTo({ top: 0, behavior: "smooth" }); window.history.pushState({}, "", pathFor(next, survey.id, selectedArchiveId));
   };
@@ -124,14 +127,66 @@ export default function SurveyApp() {
     setSelectedArchiveId(archiveId); setScreen("archiveDocument"); window.scrollTo({ top: 0, behavior: "smooth" });
     window.history.pushState({}, "", pathFor("archiveDocument", selectedSurveyId, archiveId));
   };
-  const findAccount = () => {
+  const findAccount = async () => {
     setAccountStatus("loading");
-    setTimeout(() => { if (account.trim() === "1911") { setAccountStatus("found"); setToast("Объект успешно подтверждён"); } else setAccountStatus("error"); }, 900);
+    try {
+      const response = await fetch("/api/personal-accounts/resolve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ accountReference: account.trim() }),
+      });
+      if (!response.ok) throw new Error("Account resolution failed");
+      setAccountStatus("found");
+      setToast("Объект успешно подтверждён");
+    } catch {
+      setAccountStatus("error");
+    }
   };
-  const logout = () => {
+  const logout = async () => {
+    await fetch("/api/session", { method: "DELETE" }).catch(() => undefined);
     localStorage.removeItem(STORAGE_KEY); setSelectedSurveyId(surveys[0].id); setAnswers(defaultAnswers(surveys[0])); setAccount(""); setSignature(""); setSubmittedAt(""); setAccountStatus("idle"); go("login", true);
   };
+  const completeAuthentication = async () => {
+    if (process.env.NODE_ENV === "development") {
+      const response = await fetch("/api/dev/session", { method: "POST" });
+      if (!response.ok) {
+        setToast("Сначала примените миграции и development seed");
+        return;
+      }
+    }
+    setToast("Добро пожаловать!");
+    go("dashboard");
+  };
   const completed = answers.filter(Boolean).length;
+  const submitVote = async () => {
+    if (!selectedSurvey.backendId || questions.some((question) => !question.id)) {
+      setToast("Этот опрос пока не опубликован в backend");
+      return;
+    }
+    setSubmitting(true);
+    idempotencyKey.current ||= crypto.randomUUID();
+    const choices = { "За": "for", "Против": "against", "Воздержусь": "abstain" } as const;
+    try {
+      const response = await fetch(`/api/surveys/${selectedSurvey.backendId}/votes`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          accountReference: account,
+          idempotencyKey: idempotencyKey.current,
+          answers: answers.map((answer, index) => ({ questionId: questions[index].id, choice: choices[answer!] })),
+        }),
+      });
+      if (!response.ok) throw new Error("Vote submission failed");
+      setConfirmOpen(false);
+      setSubmittedAt(new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }));
+      setToast("Голосование отправлено");
+      setTimeout(() => go("success"), 300);
+    } catch {
+      setToast("Не удалось отправить голосование");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const Login = () => <><div className="login-hero"><Brand /><div className="hero-orbit orbit-one" /><div className="hero-orbit orbit-two" /><div className="hero-building"><Building2 size={72} /></div></div>
     <main className="screen-content login-content"><span className="eyebrow">ЭЛЕКТРОННОЕ ГОЛОСОВАНИЕ</span><h1>Опросы собственников</h1><p className="lead">Авторизуйтесь для участия в голосовании</p>
@@ -147,7 +202,7 @@ export default function SurveyApp() {
     <div className={`verify-visual ${verifyStep === 3 ? "is-success" : ""}`}><div className="verify-rings"><span /><span /><span /></div><div className="verify-icon">{verifyStep === 3 ? <Check size={42} /> : <UserRoundCheck size={42} />}</div></div>
     <span className="eyebrow">БЕЗОПАСНАЯ АВТОРИЗАЦИЯ</span><h1>{verifyStep === 3 ? "Личность подтверждена" : "Проверяем ваши данные"}</h1><p className="lead">{verifyStep === 3 ? "Данные успешно получены. Можно продолжить." : "Это займёт всего несколько секунд"}</p>
     <div className="verify-steps">{["Проверка личности", "Получение данных", "Подтверждение"].map((label, index) => <div className={`verify-row ${verifyStep > index ? "done" : verifyStep === index ? "current" : ""}`} key={label}><span className="verify-step-icon">{verifyStep > index ? <Check size={15} /> : index + 1}</span><span>{label}</span>{verifyStep === index && verifyStep < 3 && <span className="mini-loader" />}</div>)}</div>
-    <button className="button button-primary button-full bottom-cta" disabled={verifyStep < 3} onClick={() => { setToast("Добро пожаловать!"); go("dashboard"); }}>Продолжить <ArrowRight size={18} /></button>
+    <button className="button button-primary button-full bottom-cta" disabled={verifyStep < 3} onClick={completeAuthentication}>Продолжить <ArrowRight size={18} /></button>
   </main></>;
 
   const Dashboard = () => <><AppHeader action={<button className="text-action" onClick={logout}>Выйти</button>} /><main className="screen-content dashboard-content">
@@ -204,7 +259,7 @@ export default function SurveyApp() {
     <section className="sign-summary"><div><FileText size={20} /><span><small>Документ</small><strong>Протокол №{selectedSurvey.protocol} · {questions.length} ответов</strong></span></div><div><MapPin size={20} /><span><small>Объект</small><strong>ул. Геодезическая, 12, кв. 52</strong></span></div></section>
     <section className={`signature-preview ${signature ? "has-signature" : ""}`}>{signature ? <img src={signature} alt="Ваша подпись" /> : <><div className="dashed-pen"><PenLine size={29} /></div><strong>Подпись ещё не добавлена</strong><small>Нажмите кнопку ниже и распишитесь пальцем</small></>}</section>
     <button className={`button button-full ${signature ? "button-secondary" : "button-primary"}`} onClick={() => setSignatureOpen(true)}>{signature ? <><RotateCcw size={18} /> Перерисовать подпись</> : <><PenLine size={18} /> Поставить подпись</>}</button><div className="legal-note"><LockKeyhole size={16} /><span>Нажимая «Подписать и отправить», вы подтверждаете достоверность выбранных ответов.</span></div><button className="button button-primary button-full" disabled={!signature} onClick={() => setConfirmOpen(true)}><Send size={18} /> Подписать и отправить</button>
-  </main>{signatureOpen && <SignaturePad onCancel={() => setSignatureOpen(false)} onSave={(value) => { setSignature(value); setSignatureOpen(false); setToast("Подпись сохранена"); }} />}{confirmOpen && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="confirm-modal"><div className="modal-icon"><ShieldCheck size={26} /></div><h2>Подтверждение</h2><p>Вы ответили на все вопросы. После отправки ответы будут зафиксированы в листе голосования.</p><div className="modal-summary"><span>Протокол №{selectedSurvey.protocol}</span><strong>{questions.length} ответов · подпись добавлена</strong></div><button className="button button-primary button-full" onClick={() => { setConfirmOpen(false); setSubmittedAt(new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })); setToast("Голосование отправлено"); setTimeout(() => go("success"), 300); }}>Отправить голосование <Send size={18} /></button><button className="button button-ghost button-full" onClick={() => setConfirmOpen(false)}>Отмена</button></div></div>}</>;
+  </main>{signatureOpen && <SignaturePad onCancel={() => setSignatureOpen(false)} onSave={(value) => { setSignature(value); setSignatureOpen(false); setToast("Подпись сохранена"); }} />}{confirmOpen && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="confirm-modal"><div className="modal-icon"><ShieldCheck size={26} /></div><h2>Подтверждение</h2><p>Вы ответили на все вопросы. После отправки ответы будут зафиксированы в листе голосования.</p><div className="modal-summary"><span>Протокол №{selectedSurvey.protocol}</span><strong>{questions.length} ответов · подпись добавлена</strong></div><button className="button button-primary button-full" disabled={submitting} onClick={submitVote}>{submitting ? "Отправляем..." : "Отправить голосование"} <Send size={18} /></button><button className="button button-ghost button-full" disabled={submitting} onClick={() => setConfirmOpen(false)}>Отмена</button></div></div>}</>;
 
   const Success = () => <><AppHeader /><main className="screen-content success-content"><div className="success-animation"><span /><div><Check size={45} /></div><i /><i /><i /><i /></div><span className="eyebrow success-eyebrow">ГОЛОСОВАНИЕ ЗАВЕРШЕНО</span><h1>Голос принят</h1><p className="lead">Ваше голосование успешно зарегистрировано.</p>
     <section className="receipt-card"><div className="receipt-row"><span><CalendarDays size={18} /> Дата и время</span><strong>20 августа 2026 · {submittedAt || "14:32"}</strong></div><div className="receipt-row"><span><Hash size={18} /> ID документа</span><strong className="document-id">{documentId}</strong></div><div className="receipt-row"><span><ShieldCheck size={18} /> Статус</span><strong className="green-text">Подписано и принято</strong></div></section>

@@ -1,5 +1,6 @@
 import type { TrustedSession } from "@/src/domain/session";
 import type { RecordedVote, VoteSubmission } from "@/src/domain/voting";
+import type { AuditEventType } from "@/src/domain/audit";
 
 export interface SessionStore {
   create(session: TrustedSession): Promise<void>;
@@ -14,7 +15,7 @@ export interface VoteRepository {
 
 export interface AuditEvent {
   eventId: string;
-  eventType: string;
+  eventType: AuditEventType;
   actorId?: string;
   subjectId?: string;
   requestId: string;
