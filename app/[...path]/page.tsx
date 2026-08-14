@@ -4,6 +4,9 @@ const routes = [
   ["login"],
   ["auth", "verify"],
   ["dashboard"],
+  ["archive"],
+  ["archive", "8"],
+  ["archive", "5"],
   ["surveys", "12"],
   ["surveys", "12", "preview"],
   ["surveys", "12", "account"],
@@ -12,6 +15,16 @@ const routes = [
   ["surveys", "12", "sign"],
   ["surveys", "12", "success"],
   ["surveys", "12", "document"],
+  ["surveys", "13"],
+  ["surveys", "13", "preview"],
+  ["surveys", "13", "account"],
+  ["surveys", "13", "vote"],
+  ["surveys", "13", "review"],
+  ["surveys", "13", "sign"],
+  ["surveys", "13", "success"],
+  ["surveys", "13", "document"],
+  ["surveys", "14"],
+  ["surveys", "14", "preview"],
 ];
 
 export function generateStaticParams() {

@@ -3,36 +3,45 @@
 /* eslint-disable @next/next/no-img-element -- Signature images are runtime canvas data URLs. */
 
 import {
-  ArrowLeft, ArrowRight, BatteryFull, Building2, CalendarDays, Check,
+  Archive, ArrowLeft, ArrowRight, BatteryFull, Building2, CalendarDays, Check,
   CheckCircle2, ChevronRight, CircleAlert, ClipboardCheck, Clock3, FileText,
   Fingerprint, Hash, Home, Landmark, LockKeyhole, Mail, MapPin, PenLine,
-  Printer, RotateCcw, Search, Send, ShieldCheck, Signal, UserRoundCheck,
+  RotateCcw, Search, Send, ShieldCheck, Signal, UserRoundCheck,
   Vote, Wifi, X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { SignaturePad } from "./signature-pad";
+import { archivedSheets, defaultAnswers, surveys, type Answer } from "./survey-data";
+import { VotingSheet } from "./voting-sheet";
 
-type Screen = "login" | "verify" | "dashboard" | "intro" | "preview" | "account" | "vote" | "review" | "sign" | "success" | "document";
-type Answer = "За" | "Против" | "Воздержусь";
+type Screen = "login" | "verify" | "dashboard" | "archive" | "archiveDocument" | "intro" | "preview" | "account" | "vote" | "review" | "sign" | "success" | "document";
 type AuthMethod = "Digital ID" | "eGov";
 
 const STORAGE_KEY = "aerc-surveys-demo-v1";
-const DOCUMENT_ID = "AERC-VOTE-2026-00001911";
-const questions = [
-  { short: "Текущий ремонт", text: "Утвердить план текущего ремонта подъездов многоквартирного жилого дома на 2026 год." },
-  { short: "Видеонаблюдение", text: "Утвердить установку дополнительных камер видеонаблюдения в подъездах и на придомовой территории." },
-  { short: "LED-освещение", text: "Утвердить замену осветительных приборов в местах общего пользования на энергоэффективные LED-светильники." },
-  { short: "Благоустройство", text: "Утвердить проведение работ по благоустройству придомовой территории." },
-  { short: "Обслуживание сетей", text: "Утвердить проведение профилактического обслуживания инженерных сетей многоквартирного жилого дома." },
-  { short: "Информирование", text: "Утвердить предложенный порядок информирования собственников о выполненных работах и расходовании средств." },
-];
-const defaults: Answer[] = ["За", "Против", "За", "За", "Воздержусь", "За"];
-const pathByScreen: Record<Screen, string> = {
-  login: "/login", verify: "/auth/verify", dashboard: "/dashboard", intro: "/surveys/12", preview: "/surveys/12/preview",
-  account: "/surveys/12/account", vote: "/surveys/12/vote", review: "/surveys/12/review",
-  sign: "/surveys/12/sign", success: "/surveys/12/success", document: "/surveys/12/document",
-};
-const screenByPath = Object.fromEntries(Object.entries(pathByScreen).map(([screen, path]) => [path, screen])) as Record<string, Screen>;
+
+const surveySegments: Partial<Record<Screen, string>> = { preview: "preview", account: "account", vote: "vote", review: "review", sign: "sign", success: "success", document: "document" };
+
+function pathFor(screen: Screen, surveyId: string, archiveId: string) {
+  if (screen === "login") return "/login";
+  if (screen === "verify") return "/auth/verify";
+  if (screen === "dashboard") return "/dashboard";
+  if (screen === "archive") return "/archive";
+  if (screen === "archiveDocument") return `/archive/${archiveId}`;
+  if (screen === "intro") return `/surveys/${surveyId}`;
+  return `/surveys/${surveyId}/${surveySegments[screen]}`;
+}
+
+function routeFromPath(pathname: string): { screen: Screen; surveyId?: string; archiveId?: string } | null {
+  if (pathname === "/login") return { screen: "login" };
+  if (pathname === "/auth/verify") return { screen: "verify" };
+  if (pathname === "/dashboard") return { screen: "dashboard" };
+  if (pathname === "/archive") return { screen: "archive" };
+  const archiveMatch = pathname.match(/^\/archive\/([^/]+)$/);
+  if (archiveMatch) return { screen: "archiveDocument", archiveId: archiveMatch[1] };
+  const surveyMatch = pathname.match(/^\/surveys\/([^/]+)(?:\/(preview|account|vote|review|sign|success|document))?$/);
+  if (!surveyMatch) return null;
+  return { screen: (surveyMatch[2] || "intro") as Screen, surveyId: surveyMatch[1] };
+}
 
 function Brand({ compact = false }: { compact?: boolean }) {
   return <div className={`brand ${compact ? "brand-compact" : ""}`}>
@@ -62,7 +71,9 @@ export default function SurveyApp() {
   const [emailMode, setEmailMode] = useState(false);
   const [account, setAccount] = useState("");
   const [accountStatus, setAccountStatus] = useState<"idle" | "loading" | "found" | "error">("idle");
-  const [answers, setAnswers] = useState<(Answer | null)[]>(defaults);
+  const [selectedSurveyId, setSelectedSurveyId] = useState(surveys[0].id);
+  const [selectedArchiveId, setSelectedArchiveId] = useState(archivedSheets[0].id);
+  const [answers, setAnswers] = useState<(Answer | null)[]>(defaultAnswers(surveys[0]));
   const [questionIndex, setQuestionIndex] = useState(0);
   const [signature, setSignature] = useState("");
   const [signatureOpen, setSignatureOpen] = useState(false);
@@ -70,30 +81,49 @@ export default function SurveyApp() {
   const [toast, setToast] = useState("");
   const [submittedAt, setSubmittedAt] = useState("");
   const [hydrated, setHydrated] = useState(false);
+  const selectedSurvey = surveys.find((survey) => survey.id === selectedSurveyId) || surveys[0];
+  const selectedArchive = archivedSheets.find((sheet) => sheet.id === selectedArchiveId) || archivedSheets[0];
+  const questions = selectedSurvey.questions;
+  const documentId = `AERC-VOTE-2026-${selectedSurvey.protocol.padStart(6, "0")}52`;
 
   useEffect(() => {
     queueMicrotask(() => {
       try {
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
-          const state = JSON.parse(saved) as { screen?: Screen; answers?: (Answer | null)[]; account?: string; signature?: string; submittedAt?: string };
-          if (state.answers?.length === 6) setAnswers(state.answers);
+          const state = JSON.parse(saved) as { screen?: Screen; selectedSurveyId?: string; selectedArchiveId?: string; answers?: (Answer | null)[]; account?: string; signature?: string; submittedAt?: string };
+          const route = routeFromPath(window.location.pathname);
+          const surveyId = route?.surveyId || state.selectedSurveyId || surveys[0].id;
+          const survey = surveys.find((item) => item.id === surveyId) || surveys[0];
+          setSelectedSurveyId(survey.id);
+          setSelectedArchiveId(route?.archiveId || state.selectedArchiveId || archivedSheets[0].id);
+          if (state.answers?.length === survey.questions.length) setAnswers(state.answers); else setAnswers(defaultAnswers(survey));
           if (state.account) setAccount(state.account);
           if (state.signature) setSignature(state.signature);
           if (state.submittedAt) setSubmittedAt(state.submittedAt);
-          const initial = screenByPath[window.location.pathname] || state.screen;
+          const initial = route?.screen || state.screen;
           if (initial) setScreen(initial);
-        } else if (screenByPath[window.location.pathname]) setScreen(screenByPath[window.location.pathname]);
+        } else {
+          const route = routeFromPath(window.location.pathname);
+          if (route) {
+            setScreen(route.screen);
+            if (route.surveyId) {
+              const survey = surveys.find((item) => item.id === route.surveyId) || surveys[0];
+              setSelectedSurveyId(survey.id); setAnswers(defaultAnswers(survey));
+            }
+            if (route.archiveId) setSelectedArchiveId(route.archiveId);
+          }
+        }
       } catch { localStorage.removeItem(STORAGE_KEY); }
       setHydrated(true);
     });
   }, []);
   useEffect(() => {
     if (!hydrated) return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ screen, answers, account, signature, submittedAt }));
-  }, [screen, answers, account, signature, submittedAt, hydrated]);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ screen, selectedSurveyId, selectedArchiveId, answers, account, signature, submittedAt }));
+  }, [screen, selectedSurveyId, selectedArchiveId, answers, account, signature, submittedAt, hydrated]);
   useEffect(() => {
-    const pop = () => { const next = screenByPath[window.location.pathname]; if (next) setScreen(next); };
+    const pop = () => { const route = routeFromPath(window.location.pathname); if (route) { setScreen(route.screen); if (route.surveyId) setSelectedSurveyId(route.surveyId); if (route.archiveId) setSelectedArchiveId(route.archiveId); } };
     window.addEventListener("popstate", pop); return () => window.removeEventListener("popstate", pop);
   }, []);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(""), 2600); return () => clearTimeout(timer); }, [toast]);
@@ -105,14 +135,23 @@ export default function SurveyApp() {
 
   const go = (next: Screen, replace = false) => {
     setScreen(next); window.scrollTo({ top: 0, behavior: "smooth" });
-    window.history[replace ? "replaceState" : "pushState"]({}, "", pathByScreen[next]);
+    window.history[replace ? "replaceState" : "pushState"]({}, "", pathFor(next, selectedSurveyId, selectedArchiveId));
+  };
+  const openSurvey = (surveyId: string, next: "intro" | "preview") => {
+    const survey = surveys.find((item) => item.id === surveyId) || surveys[0];
+    setSelectedSurveyId(survey.id); setAnswers(defaultAnswers(survey)); setSignature(""); setSubmittedAt(""); setQuestionIndex(0); setScreen(next);
+    window.scrollTo({ top: 0, behavior: "smooth" }); window.history.pushState({}, "", pathFor(next, survey.id, selectedArchiveId));
+  };
+  const openArchive = (archiveId: string) => {
+    setSelectedArchiveId(archiveId); setScreen("archiveDocument"); window.scrollTo({ top: 0, behavior: "smooth" });
+    window.history.pushState({}, "", pathFor("archiveDocument", selectedSurveyId, archiveId));
   };
   const findAccount = () => {
     setAccountStatus("loading");
     setTimeout(() => { if (account.trim() === "1911") { setAccountStatus("found"); setToast("Объект успешно подтверждён"); } else setAccountStatus("error"); }, 900);
   };
   const logout = () => {
-    localStorage.removeItem(STORAGE_KEY); setAnswers(defaults); setAccount(""); setSignature(""); setSubmittedAt(""); setAccountStatus("idle"); go("login", true);
+    localStorage.removeItem(STORAGE_KEY); setSelectedSurveyId(surveys[0].id); setAnswers(defaultAnswers(surveys[0])); setAccount(""); setSignature(""); setSubmittedAt(""); setAccountStatus("idle"); go("login", true);
   };
   const completed = answers.filter(Boolean).length;
 
@@ -136,24 +175,32 @@ export default function SurveyApp() {
   const Dashboard = () => <><AppHeader action={<button className="text-action" onClick={logout}>Выйти</button>} /><main className="screen-content dashboard-content">
     <div className="welcome-row"><div><span className="muted">Добрый день!</span><h1>Мои опросы</h1></div><div className="avatar">ОК</div></div>
     <section className="profile-card"><div className="profile-icon"><Building2 size={24} /></div><div className="profile-main"><small>Профиль участника</small><strong>ТОО «ОСИ-КСК»</strong><span>БИН 220740012345</span></div><div className="verified-badge"><ShieldCheck size={14} /> Организация подтверждена</div></section>
-    <div className="section-heading"><h2>Доступные опросы</h2><span>1 активный</span></div>
-    <section className="survey-card survey-active"><div className="survey-top"><span className="status-badge new">Новый</span><div className="survey-symbol"><Vote size={24} /></div></div><small className="protocol">ПРОТОКОЛ №12</small><h3>Собрание собственников дома</h3><div className="survey-meta"><span><CalendarDays size={16} /> до 25 августа 2026</span><span><ClipboardCheck size={16} /> 6 вопросов</span></div><div className="survey-actions"><button className="button button-secondary" onClick={() => go("preview")}><FileText size={17} /> Посмотреть</button><button className="button button-primary" onClick={() => go("intro")}>Пройти опрос <ArrowRight size={18} /></button></div></section>
-    <section className="survey-card survey-complete"><div><span className="status-badge complete"><CheckCircle2 size={13} /> Завершён</span><small>ПРОТОКОЛ №8</small></div><h3>Выбор сервисной компании</h3><p>Голосование завершено 12.06.2026</p></section>
-    <div className="empty-state"><FileText size={19} /><span>Других активных опросов пока нет</span></div>
+    <div className="section-heading"><h2>Доступные опросы</h2><span>2 активных</span></div>
+    <div className="survey-stack">{surveys.map((survey) => <section className={`survey-card ${survey.status === "active" ? "survey-active" : "survey-soon"}`} key={survey.id}><div className="survey-top"><span className={`status-badge ${survey.status === "active" ? "new" : "scheduled"}`}>{survey.status === "active" ? "Открыт" : "Скоро"}</span><div className="survey-symbol"><Vote size={24} /></div></div><small className="protocol">ПРОТОКОЛ №{survey.protocol}</small><h3>{survey.title}</h3><p className="survey-description">{survey.subtitle}</p><div className="survey-meta"><span><CalendarDays size={16} /> {survey.deadline}</span><span><ClipboardCheck size={16} /> {survey.questions.length} вопросов</span></div><div className="survey-actions"><button className="button button-secondary" onClick={() => openSurvey(survey.id, "preview")}><FileText size={17} /> Посмотреть</button>{survey.status === "active" ? <button className="button button-primary" onClick={() => openSurvey(survey.id, "intro")}>Пройти <ArrowRight size={18} /></button> : <button className="button button-muted" disabled>С 1 сентября</button>}</div></section>)}</div>
+    <div className="section-heading archive-heading"><h2>Мои опросные листы</h2><button className="text-action" onClick={() => go("archive")}>Все листы <ChevronRight size={15} /></button></div>
+    <section className="survey-card survey-complete"><div><span className="status-badge complete"><CheckCircle2 size={13} /> Завершён</span><small>ПРОТОКОЛ №8</small></div><h3>Выбор сервисной компании</h3><p>Голосование завершено 12.06.2026</p><button className="archive-open" onClick={() => openArchive("8")}><FileText size={16} /> Открыть опросный лист <ChevronRight size={16} /></button></section>
   </main></>;
 
-  const Intro = () => <><AppHeader onBack={() => go("dashboard")} /><main className="screen-content intro-content"><StepDots step={1} /><div className="document-illustration"><FileText size={48} /><span><Check size={16} /></span></div><span className="eyebrow">ПРОТОКОЛ №12</span><h1>Собрание собственников квартир и помещений</h1><p className="lead">Голосование по вопросам управления многоквартирным жилым домом</p>
-    <section className="info-card"><div><ClipboardCheck size={19} /><span><small>Количество</small><strong>6 вопросов</strong></span></div><div><Clock3 size={19} /><span><small>Время</small><strong>≈ 3 минуты</strong></span></div><div><CalendarDays size={19} /><span><small>Срок голосования</small><strong>до 25.08.2026</strong></span></div></section>
+  const ArchiveView = () => <><AppHeader title="Мои опросные листы" onBack={() => go("dashboard")} /><main className="screen-content archive-content">
+    <div className="archive-hero"><div className="page-icon"><Archive size={27} /></div><div><span className="eyebrow">АРХИВ ДОКУМЕНТОВ</span><h1>История голосований</h1></div></div>
+    <p className="lead">Все подписанные вами листы хранятся в профиле и доступны для просмотра или печати.</p>
+    <div className="archive-summary"><div><strong>{archivedSheets.length}</strong><span>документа</span></div><div><strong>2026</strong><span>текущий год</span></div><ShieldCheck size={24} /></div>
+    <div className="archive-list">{archivedSheets.map((sheet) => <article className="archive-card" key={sheet.id}><div className="archive-card-icon"><FileText size={22} /></div><div className="archive-card-copy"><div><span className="status-badge complete"><CheckCircle2 size={12} /> Подписан</span><small>ПРОТОКОЛ №{sheet.protocol}</small></div><h2>{sheet.title}</h2><p><CalendarDays size={14} /> {sheet.date} · {sheet.questions.length} вопроса</p><strong className="archive-document-id">{sheet.documentId}</strong></div><button className="archive-card-button" onClick={() => openArchive(sheet.id)} aria-label={`Открыть лист к протоколу №${sheet.protocol}`}><ChevronRight size={19} /></button></article>)}</div>
+    <div className="notice"><ShieldCheck size={19} /><span>Архивные документы защищены и содержат отметку электронной подписи.</span></div>
+  </main></>;
+
+  const Intro = () => <><AppHeader onBack={() => go("dashboard")} /><main className="screen-content intro-content"><StepDots step={1} /><div className="document-illustration"><FileText size={48} /><span><Check size={16} /></span></div><span className="eyebrow">ПРОТОКОЛ №{selectedSurvey.protocol}</span><h1>{selectedSurvey.title}</h1><p className="lead">{selectedSurvey.subtitle}</p>
+    <section className="info-card"><div><ClipboardCheck size={19} /><span><small>Количество</small><strong>{questions.length} вопросов</strong></span></div><div><Clock3 size={19} /><span><small>Время</small><strong>{selectedSurvey.duration}</strong></span></div><div><CalendarDays size={19} /><span><small>Срок голосования</small><strong>{selectedSurvey.deadlineShort}</strong></span></div></section>
     <div className="notice"><ShieldCheck size={19} /><span>Ваш голос будет зафиксирован после подтверждения рукописной подписью.</span></div><button className="button button-secondary button-full preview-link" onClick={() => go("preview")}><FileText size={18} /> Посмотреть все вопросы</button><button className="button button-primary button-full" onClick={() => go("account")}>Начать <ArrowRight size={18} /></button>
   </main></>;
 
   const Preview = () => <><AppHeader title="Просмотр опроса" onBack={() => go("dashboard")} /><main className="screen-content preview-content">
-    <div className="preview-hero"><div className="page-icon"><FileText size={27} /></div><div><span className="eyebrow">ПРОТОКОЛ №12</span><h1>Вопросы голосования</h1></div></div>
+    <div className="preview-hero"><div className="page-icon"><FileText size={27} /></div><div><span className="eyebrow">ПРОТОКОЛ №{selectedSurvey.protocol}</span><h1>{selectedSurvey.title}</h1></div></div>
     <p className="lead">Ознакомьтесь с повесткой до начала голосования. Ответы на этом экране не сохраняются.</p>
-    <div className="preview-meta"><span><ClipboardCheck size={16} /> 6 вопросов</span><span><CalendarDays size={16} /> до 25.08.2026</span><span><Clock3 size={16} /> ≈ 3 минуты</span></div>
+    <div className="preview-meta"><span><ClipboardCheck size={16} /> {questions.length} вопросов</span><span><CalendarDays size={16} /> {selectedSurvey.deadlineShort}</span><span><Clock3 size={16} /> {selectedSurvey.duration}</span></div>
     <div className="preview-list">{questions.map((question, index) => <article key={question.short}><span>{String(index + 1).padStart(2, "0")}</span><div><small>{question.short}</small><p>{question.text}</p></div></article>)}</div>
     <div className="notice"><ShieldCheck size={19} /><span>Для участия потребуется подтвердить объект лицевым счётом Астана-ЕРЦ.</span></div>
-    <button className="button button-primary button-full" onClick={() => go("intro")}>Перейти к опросу <ArrowRight size={18} /></button>
+    {selectedSurvey.status === "active" ? <button className="button button-primary button-full" onClick={() => go("intro")}>Перейти к опросу <ArrowRight size={18} /></button> : <button className="button button-muted button-full" disabled>Голосование откроется 1 сентября</button>}
   </main></>;
 
   const Account = () => <><AppHeader title="Подтверждение объекта" onBack={() => go("intro")} /><main className="screen-content account-content"><StepDots step={2} /><div className="page-icon"><Home size={27} /></div><h1>Найдём ваш объект</h1><p className="lead">Введите лицевой счёт Астана-ЕРЦ, чтобы подтвердить право голоса</p>
@@ -164,41 +211,35 @@ export default function SurveyApp() {
     {accountStatus === "found" && <section className="object-card"><div className="object-head"><span><Check size={20} /></span><div><small>ЛИЦЕВОЙ СЧЁТ НАЙДЕН</small><strong>Данные подтверждены</strong></div></div><div className="object-address"><MapPin size={19} /><div><small>Адрес объекта</small><strong>г. Астана, ул. Геодезическая, д. 12</strong></div></div><div className="object-grid"><div><small>Квартира</small><strong>52</strong></div><div><small>Тип помещения</small><strong>Квартира</strong></div></div><button className="button button-primary button-full" onClick={() => { setQuestionIndex(0); go("vote"); }}>Перейти к голосованию <ArrowRight size={18} /></button></section>}
   </main></>;
 
-  const VoteScreen = () => { const current = questions[questionIndex]; return <><AppHeader title="Голосование" onBack={() => questionIndex > 0 ? setQuestionIndex(questionIndex - 1) : go("account")} action={<span className="nav-counter">{questionIndex + 1}/6</span>} /><main className="screen-content vote-content">
-    <div className="progress-label"><span>Вопрос {questionIndex + 1} из 6</span><strong>{Math.round(((questionIndex + 1) / 6) * 100)}%</strong></div><div className="progress-track"><span style={{ width: `${((questionIndex + 1) / 6) * 100}%` }} /></div><div className="question-number">{String(questionIndex + 1).padStart(2, "0")}</div><span className="eyebrow">{current.short.toUpperCase()}</span><h1>{current.text}</h1><p className="choice-label">Выберите один вариант ответа</p>
+  const VoteScreen = () => { const current = questions[questionIndex]; return <><AppHeader title="Голосование" onBack={() => questionIndex > 0 ? setQuestionIndex(questionIndex - 1) : go("account")} action={<span className="nav-counter">{questionIndex + 1}/{questions.length}</span>} /><main className="screen-content vote-content">
+    <div className="progress-label"><span>Вопрос {questionIndex + 1} из {questions.length}</span><strong>{Math.round(((questionIndex + 1) / questions.length) * 100)}%</strong></div><div className="progress-track"><span style={{ width: `${((questionIndex + 1) / questions.length) * 100}%` }} /></div><div className="question-number">{String(questionIndex + 1).padStart(2, "0")}</div><span className="eyebrow">{current.short.toUpperCase()}</span><h1>{current.text}</h1><p className="choice-label">Выберите один вариант ответа</p>
     <div className="answer-list">{(["За", "Против", "Воздержусь"] as Answer[]).map((answer) => <button className={`answer-card ${answers[questionIndex] === answer ? "selected" : ""}`} key={answer} onClick={() => { const next = [...answers]; next[questionIndex] = answer; setAnswers(next); }}><span className="radio-mark">{answers[questionIndex] === answer && <Check size={15} />}</span><span><strong>{answer}</strong><small>{answer === "За" ? "Поддерживаю предложение" : answer === "Против" ? "Не поддерживаю предложение" : "Не принимаю сторону"}</small></span></button>)}</div>
-    <div className="vote-navigation"><button className="button button-secondary" onClick={() => questionIndex > 0 ? setQuestionIndex(questionIndex - 1) : go("account")}><ArrowLeft size={18} /> Назад</button><button className="button button-primary" disabled={!answers[questionIndex]} onClick={() => questionIndex === 5 ? go("review") : setQuestionIndex(questionIndex + 1)}>{questionIndex === 5 ? "Проверить" : "Далее"} <ArrowRight size={18} /></button></div>
+    <div className="vote-navigation"><button className="button button-secondary" onClick={() => questionIndex > 0 ? setQuestionIndex(questionIndex - 1) : go("account")}><ArrowLeft size={18} /> Назад</button><button className="button button-primary" disabled={!answers[questionIndex]} onClick={() => questionIndex === questions.length - 1 ? go("review") : setQuestionIndex(questionIndex + 1)}>{questionIndex === questions.length - 1 ? "Проверить" : "Далее"} <ArrowRight size={18} /></button></div>
   </main></>; };
 
-  const Review = () => <><AppHeader title="Проверка" onBack={() => { setQuestionIndex(5); go("vote"); }} /><main className="screen-content review-content"><StepDots step={3} /><div className="page-icon success-soft"><ClipboardCheck size={27} /></div><h1>Проверьте ответы</h1><p className="lead">При необходимости вернитесь к вопросу и измените выбор</p>
+  const Review = () => <><AppHeader title="Проверка" onBack={() => { setQuestionIndex(questions.length - 1); go("vote"); }} /><main className="screen-content review-content"><StepDots step={3} /><div className="page-icon success-soft"><ClipboardCheck size={27} /></div><h1>Проверьте ответы</h1><p className="lead">При необходимости вернитесь к вопросу и измените выбор</p>
     <div className="review-list">{questions.map((question, index) => <button key={question.short} onClick={() => { setQuestionIndex(index); go("vote"); }}><span className="review-number">{index + 1}</span><span className="review-copy"><strong>{question.short}</strong><small>{question.text}</small></span><span className={`answer-pill ${answers[index] === "За" ? "yes" : answers[index] === "Против" ? "no" : "neutral"}`}>{answers[index] || "Не выбран"}</span><ChevronRight size={17} /></button>)}</div>
-    <div className="completion-note"><CheckCircle2 size={18} /><strong>{completed} из 6 вопросов заполнено</strong></div><button className="button button-primary button-full" disabled={completed !== 6} onClick={() => go("sign")}><PenLine size={18} /> Подписать голосование</button>
+    <div className="completion-note"><CheckCircle2 size={18} /><strong>{completed} из {questions.length} вопросов заполнено</strong></div><button className="button button-primary button-full" disabled={completed !== questions.length} onClick={() => go("sign")}><PenLine size={18} /> Подписать голосование</button>
   </main></>;
 
   const Sign = () => <><AppHeader title="Подписание" onBack={() => go("review")} /><main className="screen-content sign-content"><StepDots step={4} /><div className="page-icon"><PenLine size={27} /></div><h1>Подпишите голосование</h1><p className="lead">Одна подпись будет добавлена к каждому выбранному вами ответу</p>
-    <section className="sign-summary"><div><FileText size={20} /><span><small>Документ</small><strong>Протокол №12 · 6 ответов</strong></span></div><div><MapPin size={20} /><span><small>Объект</small><strong>ул. Геодезическая, 12, кв. 52</strong></span></div></section>
+    <section className="sign-summary"><div><FileText size={20} /><span><small>Документ</small><strong>Протокол №{selectedSurvey.protocol} · {questions.length} ответов</strong></span></div><div><MapPin size={20} /><span><small>Объект</small><strong>ул. Геодезическая, 12, кв. 52</strong></span></div></section>
     <section className={`signature-preview ${signature ? "has-signature" : ""}`}>{signature ? <img src={signature} alt="Ваша подпись" /> : <><div className="dashed-pen"><PenLine size={29} /></div><strong>Подпись ещё не добавлена</strong><small>Нажмите кнопку ниже и распишитесь пальцем</small></>}</section>
     <button className={`button button-full ${signature ? "button-secondary" : "button-primary"}`} onClick={() => setSignatureOpen(true)}>{signature ? <><RotateCcw size={18} /> Перерисовать подпись</> : <><PenLine size={18} /> Поставить подпись</>}</button><div className="legal-note"><LockKeyhole size={16} /><span>Нажимая «Подписать и отправить», вы подтверждаете достоверность выбранных ответов.</span></div><button className="button button-primary button-full" disabled={!signature} onClick={() => setConfirmOpen(true)}><Send size={18} /> Подписать и отправить</button>
-  </main>{signatureOpen && <SignaturePad onCancel={() => setSignatureOpen(false)} onSave={(value) => { setSignature(value); setSignatureOpen(false); setToast("Подпись сохранена"); }} />}{confirmOpen && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="confirm-modal"><div className="modal-icon"><ShieldCheck size={26} /></div><h2>Подтверждение</h2><p>Вы ответили на все 6 вопросов. После отправки ответы будут зафиксированы в листе голосования.</p><div className="modal-summary"><span>Протокол №12</span><strong>6 ответов · подпись добавлена</strong></div><button className="button button-primary button-full" onClick={() => { setConfirmOpen(false); setSubmittedAt(new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })); setToast("Голосование отправлено"); setTimeout(() => go("success"), 300); }}>Отправить голосование <Send size={18} /></button><button className="button button-ghost button-full" onClick={() => setConfirmOpen(false)}>Отмена</button></div></div>}</>;
+  </main>{signatureOpen && <SignaturePad onCancel={() => setSignatureOpen(false)} onSave={(value) => { setSignature(value); setSignatureOpen(false); setToast("Подпись сохранена"); }} />}{confirmOpen && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="confirm-modal"><div className="modal-icon"><ShieldCheck size={26} /></div><h2>Подтверждение</h2><p>Вы ответили на все вопросы. После отправки ответы будут зафиксированы в листе голосования.</p><div className="modal-summary"><span>Протокол №{selectedSurvey.protocol}</span><strong>{questions.length} ответов · подпись добавлена</strong></div><button className="button button-primary button-full" onClick={() => { setConfirmOpen(false); setSubmittedAt(new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })); setToast("Голосование отправлено"); setTimeout(() => go("success"), 300); }}>Отправить голосование <Send size={18} /></button><button className="button button-ghost button-full" onClick={() => setConfirmOpen(false)}>Отмена</button></div></div>}</>;
 
   const Success = () => <><AppHeader /><main className="screen-content success-content"><div className="success-animation"><span /><div><Check size={45} /></div><i /><i /><i /><i /></div><span className="eyebrow success-eyebrow">ГОЛОСОВАНИЕ ЗАВЕРШЕНО</span><h1>Голос принят</h1><p className="lead">Ваше голосование успешно зарегистрировано.</p>
-    <section className="receipt-card"><div className="receipt-row"><span><CalendarDays size={18} /> Дата и время</span><strong>20 августа 2026 · {submittedAt || "14:32"}</strong></div><div className="receipt-row"><span><Hash size={18} /> ID документа</span><strong className="document-id">{DOCUMENT_ID}</strong></div><div className="receipt-row"><span><ShieldCheck size={18} /> Статус</span><strong className="green-text">Подписано и принято</strong></div></section>
+    <section className="receipt-card"><div className="receipt-row"><span><CalendarDays size={18} /> Дата и время</span><strong>20 августа 2026 · {submittedAt || "14:32"}</strong></div><div className="receipt-row"><span><Hash size={18} /> ID документа</span><strong className="document-id">{documentId}</strong></div><div className="receipt-row"><span><ShieldCheck size={18} /> Статус</span><strong className="green-text">Подписано и принято</strong></div></section>
     <div className="success-actions"><button className="button button-primary button-full" onClick={() => go("document")}><FileText size={18} /> Открыть PDF</button><button className="button button-secondary button-full" onClick={() => go("dashboard")}><Home size={18} /> На главную</button></div><p className="receipt-hint">Электронный лист голосования сохранён в вашем профиле</p>
   </main></>;
 
-  const Document = () => <div className="document-view"><div className="document-toolbar no-print"><button className="icon-button" onClick={() => go("success")} aria-label="Назад"><ArrowLeft size={20} /></button><div><strong>Лист голосования</strong><small>A4 · готов к печати</small></div><button className="button button-primary print-button" onClick={() => window.print()}><Printer size={17} /> Печать / PDF</button></div>
-    <article className="a4-document"><header className="paper-header"><Brand compact /><div className="paper-stamp"><ShieldCheck size={14} /> ЭЛЕКТРОННЫЙ ДОКУМЕНТ</div></header><div className="paper-title"><span>ТОО «Астана-ЕРЦ»</span><h1>ЛИСТ ГОЛОСОВАНИЯ №1</h1><p>к Протоколу №12 собрания собственников квартир, нежилых помещений многоквартирного жилого дома</p></div>
-      <section className="paper-details"><div><small>Дата проведения</small><strong>20.08.2026</strong></div><div className="wide"><small>Местонахождение многоквартирного жилого дома</small><strong>г. Астана, ул. Геодезическая, д. 12</strong></div><div><small>Лицевой счёт</small><strong>1911</strong></div><div><small>Квартира</small><strong>52</strong></div></section>
-      <table className="vote-table"><thead><tr><th>№</th><th>Вопросы, внесённые для обсуждения</th><th>За</th><th>Против</th><th>Воздержусь</th></tr></thead><tbody>{questions.map((question, index) => <tr key={question.short}><td>{index + 1}</td><td>{question.text}</td>{(["За", "Против", "Воздержусь"] as Answer[]).map((answer) => <td key={answer} className="signature-cell">{answers[index] === answer && signature && <img src={signature} alt="Подпись" />}</td>)}</tr>)}</tbody></table>
-      <section className="owner-info"><h2>Сведения о собственнике</h2><div className="owner-grid"><div><small>Адрес объекта</small><strong>г. Астана, ул. Геодезическая, д. 12, кв. 52</strong></div><div><small>Лицевой счёт</small><strong>1911</strong></div><div><small>Дата и время голосования</small><strong>20.08.2026 · {submittedAt || "14:32"}</strong></div><div><small>ID документа</small><strong>{DOCUMENT_ID}</strong></div></div></section>
-      <section className="paper-signature"><div><small>Подпись собственника</small>{signature ? <img src={signature} alt="Подпись собственника" /> : <span className="signature-placeholder">Подпись сохранится здесь</span>}</div><div className="qr-block"><div className="fake-qr">{Array.from({ length: 9 }).map((_, index) => <span key={index} />)}</div><small>Проверка документа</small><strong>{DOCUMENT_ID}</strong></div></section><footer className="paper-footer"><span>Сформировано в системе «Астана-ЕРЦ — Опросы»</span><span>Страница 1 из 1</span></footer>
-    </article><button className="button button-primary mobile-print no-print" onClick={() => window.print()}><Printer size={18} /> Печать / Сохранить как PDF</button>
-  </div>;
+  const Document = () => <VotingSheet onBack={() => go("success")} protocol={selectedSurvey.protocol} title={selectedSurvey.title} date="20.08.2026" time={submittedAt || "14:32"} documentId={documentId} address="г. Астана, ул. Геодезическая, д. 12" account="1911" apartment="52" questions={questions} answers={answers} signature={signature} />;
+  const ArchiveDocument = () => <VotingSheet onBack={() => go("archive")} protocol={selectedArchive.protocol} title={selectedArchive.title} date={selectedArchive.date} time={selectedArchive.time} documentId={selectedArchive.documentId} address={selectedArchive.address} account={selectedArchive.account} apartment={selectedArchive.apartment} questions={selectedArchive.questions} answers={selectedArchive.answers} archived />;
 
   const content = () => {
-    switch (screen) { case "login": return <Login />; case "verify": return <Verify />; case "dashboard": return <Dashboard />; case "intro": return <Intro />; case "preview": return <Preview />; case "account": return <Account />; case "vote": return <VoteScreen />; case "review": return <Review />; case "sign": return <Sign />; case "success": return <Success />; case "document": return <Document />; }
+    switch (screen) { case "login": return <Login />; case "verify": return <Verify />; case "dashboard": return <Dashboard />; case "archive": return <ArchiveView />; case "archiveDocument": return <ArchiveDocument />; case "intro": return <Intro />; case "preview": return <Preview />; case "account": return <Account />; case "vote": return <VoteScreen />; case "review": return <Review />; case "sign": return <Sign />; case "success": return <Success />; case "document": return <Document />; }
   };
   if (!hydrated) return <div className="app-loading"><Brand /><span className="loader-ring" /></div>;
-  if (screen === "document") return <div className="presentation document-presentation">{content()}{toast && <div className="toast"><CheckCircle2 size={18} />{toast}</div>}</div>;
+  if (screen === "document" || screen === "archiveDocument") return <div className="presentation document-presentation">{content()}{toast && <div className="toast"><CheckCircle2 size={18} />{toast}</div>}</div>;
   return <div className="presentation"><aside className="presentation-copy"><Brand /><div className="presentation-main"><span className="presentation-tag"><ShieldCheck size={15} /> ЦИФРОВОЙ СЕРВИС</span><h2>Голосовать удобно.<br />Решать — вместе.</h2><p>Безопасный и прозрачный способ участия собственников в управлении своим домом.</p><div className="presentation-points"><span><Check size={15} /> Подтверждение личности</span><span><Check size={15} /> Электронный документ</span><span><Check size={15} /> Рукописная подпись</span></div></div><div className="presentation-footer">ТОО «Астана-ЕРЦ» · 2026</div></aside><div className="phone-stage"><div className={`phone-shell screen-${screen}`}>{content()}</div><p className="desktop-caption">Интерактивный демонстрационный прототип</p></div>{toast && <div className="toast"><CheckCircle2 size={18} />{toast}</div>}</div>;
 }
