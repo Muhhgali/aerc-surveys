@@ -7,9 +7,9 @@ export class VoteService {
   constructor(private readonly votes: VotingRepository) {}
 
   async startOrResume(command: { authSessionId: string; userId: string; surveyId: string; propertyId: string; idempotencyKey: string; requestId: string }, now = new Date()): Promise<StartOrResumeVoteResult> {
+    await this.requireOpenSurvey(command.surveyId, now);
     const existing = await this.votes.findForUserSurvey(command.surveyId, command.userId);
     if (existing?.status === "submitted") return { vote: existing, disposition: "completed" };
-    await this.requireOpenSurvey(command.surveyId, now);
     const participant = await this.votes.getParticipant(command.surveyId, command.userId, command.propertyId);
     if (!participant || participant.status !== "eligible") throw new ApplicationError("unauthorized_property", "User is not eligible to vote for this property");
     return this.votes.startOrResume({ authSessionId: command.authSessionId, participant, idempotencyKey: command.idempotencyKey, requestId: command.requestId });

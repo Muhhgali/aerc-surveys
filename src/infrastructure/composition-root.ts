@@ -8,6 +8,7 @@ import { VoteService } from "@/src/application/voting/vote-service";
 import { VoteLifecycleService } from "@/src/application/voting/vote-lifecycle-service";
 import { VisualSignatureService } from "@/src/application/voting/visual-signature-service";
 import { DocumentLifecycleService } from "@/src/application/documents/document-lifecycle-service";
+import { AdminService } from "@/src/application/admin/admin-service";
 import { loadProviderConfig } from "@/src/infrastructure/config/provider-config";
 import { getDatabaseClient } from "@/src/infrastructure/database/client";
 import {
@@ -17,6 +18,7 @@ import {
   PostgresPersonalAccountRepository,
   PostgresVotingRepository,
 } from "@/src/infrastructure/database/postgres-repositories";
+import { PostgresAdminRepository } from "@/src/infrastructure/database/postgres-admin-repository";
 import { consoleLogger } from "@/src/infrastructure/logging/structured-logger";
 import { PdfKitVotingSheetRenderer } from "@/src/infrastructure/documents/pdfkit-voting-sheet-renderer";
 import { createProviderRegistry } from "@/src/infrastructure/providers/registry";
@@ -35,6 +37,7 @@ export function createApplication() {
   const votingRepository = new PostgresVotingRepository(database);
   const membershipRepository = new PostgresOrganizationMembershipRepository(database);
   const audit = new PostgresAuditRepository(database);
+  const adminRepository = new PostgresAdminRepository(database);
   const sessions = new SessionService(new PostgresSessionStore(database), config.sessionTtlSeconds);
   const authentication = new AuthenticationService(providers.identity, identities, sessions);
   const properties = new PropertyService(providers.property, accounts);
@@ -43,5 +46,6 @@ export function createApplication() {
   const visualSignatures = new VisualSignatureService(votingRepository, votingRepository, providers.documentStorage);
   const documents = new DocumentLifecycleService(lifecycle, votingRepository, providers.signing, providers.documentStorage, new PdfKitVotingSheetRenderer());
   const organizations = new OrganizationService(membershipRepository);
-  return { config, providers, database, sessions, authentication, properties, voting, lifecycle, visualSignatures, documents, organizations, audit };
+  const admin = new AdminService(adminRepository);
+  return { config, providers, database, sessions, authentication, properties, voting, lifecycle, visualSignatures, documents, organizations, audit, admin, adminRepository };
 }

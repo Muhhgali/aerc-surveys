@@ -31,7 +31,12 @@ export async function resetE2eState() {
   const sql = e2eDatabase();
   try {
     await sql.begin(async (transaction) => {
-      await transaction`truncate table audit_logs, document_versions, documents, signature_requests, visual_signatures, binary_assets, vote_autosaves, vote_answers, votes, vote_sessions, auth_sessions restart identity cascade`;
+      await transaction`truncate table audit_logs, survey_versions, document_versions, documents, signature_requests, visual_signatures, binary_assets, vote_autosaves, vote_answers, votes, vote_sessions, auth_sessions restart identity cascade`;
+      await transaction`update surveys set status='draft' where id <> ${seedIds.survey12}`;
+      await transaction`delete from surveys where id <> ${seedIds.survey12}`;
+      await transaction`delete from user_platform_roles where user_id <> ${seedIds.representativeUser}`;
+      await transaction`delete from user_platform_roles upr using platform_roles pr where upr.role_id=pr.id and upr.user_id=${seedIds.representativeUser} and pr.role_key <> 'super_admin'`;
+      await transaction`delete from platform_access_controls where user_id <> ${seedIds.representativeUser}`;
       await transaction`delete from survey_participants where id = ${foreign.participant}`;
       await transaction`delete from external_identities where user_id = ${foreign.user}`;
       await transaction`delete from users where id = ${foreign.user}`;
@@ -49,12 +54,13 @@ export async function createForeignSurveyQuestion() {
   try {
     await sql`
       insert into surveys (id, organization_id, protocol_number, title_ru, status, starts_at, closes_at, published_at)
-      values (${foreign.survey}, ${seedIds.organization}, 'E2E-FOREIGN', 'Foreign survey fixture', 'active', now() - interval '1 day', now() + interval '1 day', now())
+      values (${foreign.survey}, ${seedIds.organization}, 'E2E-FOREIGN', 'Foreign survey fixture', 'draft', now() - interval '1 day', now() + interval '1 day', now())
     `;
     await sql`
       insert into survey_questions (id, survey_id, position, text_ru, required, status)
       values (${foreign.question}, ${foreign.survey}, 1, 'Foreign survey question', true, 'active')
     `;
+    await sql`update surveys set status='active' where id=${foreign.survey}`;
     return foreign.question;
   } finally {
     await sql.end();

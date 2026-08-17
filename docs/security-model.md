@@ -1,5 +1,13 @@
 # Модель безопасности
 
+## Stage 4 additions
+
+Administrative authorization is capability-based and server-side at every page, data, mutation and export boundary. Development admin authentication uses a registered mock external identity and persistent server session, is explicitly configured, and fails closed in production.
+
+Database defenses protect published survey/question/target snapshots and the last active super administrator. Draft writes use optimistic concurrency. Participant accounts are masked before serialization unless explicit PII permission and opt-in are present. CSV inputs are bounded and exports neutralize formula prefixes. Audit has no edit/delete HTTP route.
+
+Closed-survey policy is strict: incomplete workflows cannot autosave, sign or submit, and start/resume POST fails. Final documents remain immutable and valid.
+
 ## Trust boundaries
 
 Браузер, URL, React state, localStorage, canvas и request payload недоверенные. Доверенный state создаётся только server session, provider adapters после typed validation и транзакционными PostgreSQL records.

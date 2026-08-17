@@ -39,9 +39,9 @@ export class MockIdentityProvider implements IdentityProvider {
     }));
   }
 
-  completeAuthentication(_: { challengeId: string; response: string }, context: RequestContext) {
+  completeAuthentication(input: { challengeId: string; response: string }, context: RequestContext) {
     return run(this.runtime, context, "identity.complete", false, () => ({
-      subjectId: "mock-subject-1911",
+      subjectId: input.response === "approved-admin" ? "mock-admin" : "mock-subject-1911",
       displayName: "Демо пользователь",
       assuranceLevel: "demo" as const,
       verifiedAt: new Date().toISOString(),

@@ -1,5 +1,13 @@
 # Production roadmap
 
+## Stage 4 — completed foundation
+
+Platform RBAC, development admin identity, survey builder, deterministic published snapshots, targeting/materialization, results, participants, document registry, audit viewer, secure CSV exports, optimistic concurrency and admin/user E2E are implemented. Real eGov, Digital ID, AERC providers and production deployment remain intentionally out of scope.
+
+## Stage 5 — not started
+
+Next work is production hardening: observability and SLOs, backup/restore drills, CI/CD and migration gates, staging credentials, secret rotation, operational runbooks, rate limits/WAF policy, retention/privacy review and staging deployment readiness.
+
 ## Завершённые этапы
 
 - Demo: утверждённый UI сохранён в `demo-approved`.

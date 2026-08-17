@@ -29,6 +29,13 @@
       "when": 1786943000000,
       "tag": "0003_vote_document_immutability",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786945929376,
+      "tag": "0004_shiny_grandmaster",
+      "breakpoints": true
     }
   ]
 }

@@ -11,7 +11,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { AppHeader, Brand, StepDots } from "./app-chrome";
 import { SignaturePad } from "./signature-pad";
-import { archivedSheets, defaultAnswers, surveys, type Answer } from "./survey-data";
+import { archivedSheets, defaultAnswers, surveys as demoSurveys, type Answer, type Survey } from "./survey-data";
 import { VotingSheet } from "./voting-sheet";
 
 type Screen = "login" | "verify" | "dashboard" | "archive" | "archiveDocument" | "intro" | "preview" | "account" | "vote" | "review" | "sign" | "success" | "document";
@@ -26,6 +26,23 @@ type VoteApiDto = {
   answers: { questionId: string; choice: "for" | "against" | "abstain" }[];
   account: { accountNumber: string; address: string; unit: string };
 };
+type AvailableSurveyDto = { id: string; protocol: string; title: string; subtitle: string; startsAt: string; closesAt: string; status: "active" | "scheduled"; questions: { id: string; position: number; text: string }[] };
+
+function fromAvailableSurvey(survey: AvailableSurveyDto): Survey {
+  const closesAt = new Date(survey.closesAt);
+  return {
+    id: survey.id === "00000000-0000-4000-8000-000000000012" ? "12" : survey.id,
+    backendId: survey.id,
+    protocol: survey.protocol,
+    title: survey.title,
+    subtitle: survey.subtitle,
+    deadline: `до ${closesAt.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}`,
+    deadlineShort: `до ${closesAt.toLocaleDateString("ru-RU")}`,
+    duration: `≈ ${Math.max(1, Math.ceil(survey.questions.length / 2))} мин.`,
+    status: survey.status === "active" ? "active" : "soon",
+    questions: survey.questions.map((question) => ({ id: question.id, short: `Вопрос ${question.position}`, text: question.text })),
+  };
+}
 
 // Browser storage is intentionally limited to harmless UI navigation preferences.
 // Identity, eligibility, answers, signatures, and submissions must be server-owned.
@@ -63,9 +80,10 @@ export default function SurveyApp() {
   const [account, setAccount] = useState("");
   const [accountStatus, setAccountStatus] = useState<"idle" | "loading" | "found" | "error">("idle");
   const [accountDetails, setAccountDetails] = useState<{ address: string; unit: string } | null>(null);
-  const [selectedSurveyId, setSelectedSurveyId] = useState(surveys[0].id);
+  const [surveyCatalog, setSurveyCatalog] = useState<Survey[]>(demoSurveys);
+  const [selectedSurveyId, setSelectedSurveyId] = useState(demoSurveys[0].id);
   const [selectedArchiveId, setSelectedArchiveId] = useState(archivedSheets[0].id);
-  const [answers, setAnswers] = useState<(Answer | null)[]>(defaultAnswers(surveys[0]));
+  const [answers, setAnswers] = useState<(Answer | null)[]>(defaultAnswers(demoSurveys[0]));
   const [questionIndex, setQuestionIndex] = useState(0);
   const [signature, setSignature] = useState("");
   const [signatureOpen, setSignatureOpen] = useState(false);
@@ -79,7 +97,7 @@ export default function SurveyApp() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const idempotencyKey = useRef("");
   const [hydrated, setHydrated] = useState(false);
-  const selectedSurvey = surveys.find((survey) => survey.id === selectedSurveyId) || surveys[0];
+  const selectedSurvey = surveyCatalog.find((survey) => survey.id === selectedSurveyId) || surveyCatalog[0];
   const selectedArchive = archivedSheets.find((sheet) => sheet.id === selectedArchiveId) || archivedSheets[0];
   const questions = selectedSurvey.questions;
   const documentId = finalizedDocumentId || activeVoteId || `AERC-VOTE-2026-${selectedSurvey.protocol.padStart(6, "0")}52`;
@@ -91,8 +109,8 @@ export default function SurveyApp() {
         if (saved) {
           const state = JSON.parse(saved) as { screen?: Screen; selectedSurveyId?: string; selectedArchiveId?: string };
           const route = routeFromPath(window.location.pathname);
-          const surveyId = route?.surveyId || state.selectedSurveyId || surveys[0].id;
-          const survey = surveys.find((item) => item.id === surveyId) || surveys[0];
+          const surveyId = route?.surveyId || state.selectedSurveyId || demoSurveys[0].id;
+          const survey = demoSurveys.find((item) => item.id === surveyId) || demoSurveys[0];
           setSelectedSurveyId(survey.id);
           setSelectedArchiveId(route?.archiveId || state.selectedArchiveId || archivedSheets[0].id);
           setAnswers(defaultAnswers(survey));
@@ -103,7 +121,7 @@ export default function SurveyApp() {
           if (route) {
             setScreen(route.screen);
             if (route.surveyId) {
-              const survey = surveys.find((item) => item.id === route.surveyId) || surveys[0];
+              const survey = demoSurveys.find((item) => item.id === route.surveyId) || demoSurveys[0];
               setSelectedSurveyId(survey.id); setAnswers(defaultAnswers(survey));
             }
             if (route.archiveId) setSelectedArchiveId(route.archiveId);
@@ -129,6 +147,21 @@ export default function SurveyApp() {
       setAuthStatus("anonymous"); setScreen("login"); window.history.replaceState({}, "", "/login");
     });
   }, [hydrated, screen]);
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
+    void fetch("/api/surveys", { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) return;
+      const payload = await response.json() as { surveys: AvailableSurveyDto[] };
+      const databaseSurveys = payload.surveys.map(fromAvailableSurvey);
+      const catalog = [...databaseSurveys, ...demoSurveys.filter((survey) => !survey.backendId)];
+      setSurveyCatalog(catalog);
+      const route = routeFromPath(window.location.pathname);
+      if (route?.surveyId) {
+        const routed = catalog.find((survey) => survey.id === route.surveyId);
+        if (routed) { setSelectedSurveyId(routed.id); setAnswers(defaultAnswers(routed)); }
+      }
+    }).catch(() => undefined);
+  }, [authStatus]);
   useEffect(() => {
     if (authStatus !== "authenticated" || activeVoteId || !selectedSurvey.backendId || !(["vote", "review", "sign"] as Screen[]).includes(screen)) return;
     void fetch(`/api/surveys/${selectedSurvey.backendId}/votes`, { cache: "no-store" }).then(async (response) => {
@@ -165,7 +198,7 @@ export default function SurveyApp() {
     window.history[replace ? "replaceState" : "pushState"]({}, "", pathFor(next, selectedSurveyId, selectedArchiveId));
   };
   const openSurvey = (surveyId: string, next: "intro" | "preview") => {
-    const survey = surveys.find((item) => item.id === surveyId) || surveys[0];
+    const survey = surveyCatalog.find((item) => item.id === surveyId) || surveyCatalog[0];
     idempotencyKey.current = "";
     setActiveVoteId(""); setFinalizedDocumentId(""); setSaveStatus("idle"); setAccountDetails(null); setSelectedSurveyId(survey.id); setAnswers(defaultAnswers(survey)); setSignature(""); setSubmittedAt(""); setQuestionIndex(0); setScreen(next);
     window.scrollTo({ top: 0, behavior: "smooth" }); window.history.pushState({}, "", pathFor(next, survey.id, selectedArchiveId));
@@ -193,7 +226,7 @@ export default function SurveyApp() {
   };
   const logout = async () => {
     await fetch("/api/session", { method: "DELETE" }).catch(() => undefined);
-    localStorage.removeItem(STORAGE_KEY); setAuthStatus("anonymous"); setActiveVoteId(""); setFinalizedDocumentId(""); setSelectedSurveyId(surveys[0].id); setAnswers(defaultAnswers(surveys[0])); setAccount(""); setAccountDetails(null); setSignature(""); setSubmittedAt(""); setAccountStatus("idle"); go("login", true);
+    localStorage.removeItem(STORAGE_KEY); setAuthStatus("anonymous"); setActiveVoteId(""); setFinalizedDocumentId(""); setSelectedSurveyId(demoSurveys[0].id); setAnswers(defaultAnswers(demoSurveys[0])); setAccount(""); setAccountDetails(null); setSignature(""); setSubmittedAt(""); setAccountStatus("idle"); go("login", true);
   };
   const completeAuthentication = async () => {
     const response = await fetch("/api/dev/session", { method: "POST" });
@@ -298,7 +331,7 @@ export default function SurveyApp() {
     <div className="welcome-row"><div><span className="muted">Добрый день!</span><h1>Мои опросы</h1></div><div className="avatar">ОК</div></div>
     <section className="profile-card"><div className="profile-icon"><Building2 size={24} /></div><div className="profile-main"><small>Профиль участника</small><strong>ТОО «ОСИ-КСК»</strong><span>БИН 220740012345</span></div><div className="verified-badge"><ShieldCheck size={14} /> Организация подтверждена</div></section>
     <div className="section-heading"><h2>Доступные опросы</h2><span>2 активных</span></div>
-    <div className="survey-stack">{surveys.map((survey) => <section className={`survey-card ${survey.status === "active" ? "survey-active" : "survey-soon"}`} key={survey.id}><div className="survey-top"><span className={`status-badge ${survey.status === "active" ? "new" : "scheduled"}`}>{survey.status === "active" ? "Открыт" : "Скоро"}</span><div className="survey-symbol"><Vote size={24} /></div></div><small className="protocol">ПРОТОКОЛ №{survey.protocol}</small><h3>{survey.title}</h3><p className="survey-description">{survey.subtitle}</p><div className="survey-meta"><span><CalendarDays size={16} /> {survey.deadline}</span><span><ClipboardCheck size={16} /> {survey.questions.length} вопросов</span></div><div className="survey-actions"><button className="button button-secondary" onClick={() => openSurvey(survey.id, "preview")}><FileText size={17} /> Посмотреть</button>{survey.status === "active" ? <button className="button button-primary" onClick={() => openSurvey(survey.id, "intro")}>Пройти <ArrowRight size={18} /></button> : <button className="button button-muted" disabled>С 1 сентября</button>}</div></section>)}</div>
+    <div className="survey-stack">{surveyCatalog.map((survey) => <section className={`survey-card ${survey.status === "active" ? "survey-active" : "survey-soon"}`} key={survey.id}><div className="survey-top"><span className={`status-badge ${survey.status === "active" ? "new" : "scheduled"}`}>{survey.status === "active" ? "Открыт" : "Скоро"}</span><div className="survey-symbol"><Vote size={24} /></div></div><small className="protocol">ПРОТОКОЛ №{survey.protocol}</small><h3>{survey.title}</h3><p className="survey-description">{survey.subtitle}</p><div className="survey-meta"><span><CalendarDays size={16} /> {survey.deadline}</span><span><ClipboardCheck size={16} /> {survey.questions.length} вопросов</span></div><div className="survey-actions"><button className="button button-secondary" onClick={() => openSurvey(survey.id, "preview")}><FileText size={17} /> Посмотреть</button>{survey.status === "active" ? <button className="button button-primary" onClick={() => openSurvey(survey.id, "intro")}>Пройти <ArrowRight size={18} /></button> : <button className="button button-muted" disabled>С 1 сентября</button>}</div></section>)}</div>
     <div className="section-heading archive-heading"><h2>Мои опросные листы</h2><button className="text-action" onClick={() => go("archive")}>Все листы <ChevronRight size={15} /></button></div>
     <section className="survey-card survey-complete"><div><span className="status-badge complete"><CheckCircle2 size={13} /> Завершён</span><small>ПРОТОКОЛ №8</small></div><h3>Выбор сервисной компании</h3><p>Голосование завершено 12.06.2026</p><button className="archive-open" onClick={() => openArchive("8")}><FileText size={16} /> Открыть опросный лист <ChevronRight size={16} /></button></section>
   </main></>;

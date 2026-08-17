@@ -31,7 +31,7 @@ export async function seedDevelopmentData(sql: DatabaseClient): Promise<void> {
     await transaction`
       insert into external_identities (user_id, provider, provider_subject, verified_at, metadata)
       values (${seedIds.voterUser}, 'mock', 'mock-subject-1911', now(), ${transaction.json({ developmentSeed: true })}),
-             (${seedIds.representativeUser}, 'admin', 'development-admin', now(), ${transaction.json({ developmentSeed: true })})
+             (${seedIds.representativeUser}, 'mock', 'mock-admin', now(), ${transaction.json({ developmentSeed: true, administrative: true })})
       on conflict (provider, provider_subject) do update set user_id = excluded.user_id, verified_at = excluded.verified_at
     `;
     await transaction`
@@ -45,6 +45,17 @@ export async function seedDevelopmentData(sql: DatabaseClient): Promise<void> {
       on conflict (user_id, organization_id) do update set role = excluded.role, verified_at = excluded.verified_at
     `;
     await transaction`
+      insert into platform_access_controls (user_id)
+      values (${seedIds.representativeUser})
+      on conflict (user_id) do nothing
+    `;
+    await transaction`
+      insert into user_platform_roles (user_id, role_id, assigned_by_user_id)
+      select ${seedIds.representativeUser}, id, ${seedIds.representativeUser}
+      from platform_roles where role_key = 'super_admin'
+      on conflict (user_id, role_id) do nothing
+    `;
+    await transaction`
       insert into properties (id, city, street, building, premise, property_type, external_property_id, source, status)
       values (${seedIds.property}, 'Астана', 'Геодезическая', '12', '52', 'apartment', 'mock-property-geodezicheskaya-12-52', 'mock', 'active')
       on conflict (id) do update set status = 'active', updated_at = now()
@@ -56,9 +67,14 @@ export async function seedDevelopmentData(sql: DatabaseClient): Promise<void> {
     `;
     await transaction`
       insert into surveys (id, organization_id, protocol_number, title_ru, status, starts_at, closes_at, published_at)
-      values (${seedIds.survey12}, ${seedIds.organization}, '12', 'Собрание собственников дома', 'active',
+      values (${seedIds.survey12}, ${seedIds.organization}, '12', 'Собрание собственников дома', 'draft',
               '2026-08-01T00:00:00+05:00', '2026-08-25T23:59:59+05:00', '2026-08-01T00:00:00+05:00')
-      on conflict (id) do update set title_ru = excluded.title_ru, status = excluded.status, updated_at = now()
+      on conflict (id) do update set status = 'draft', updated_at = now()
+    `;
+    await transaction`
+      update surveys set title_ru='Собрание собственников дома', starts_at='2026-08-01T00:00:00+05:00',
+        closes_at='2026-08-25T23:59:59+05:00', published_at='2026-08-01T00:00:00+05:00'
+      where id=${seedIds.survey12}
     `;
     for (let index = 0; index < questions.length; index += 1) {
       await transaction`
@@ -81,5 +97,6 @@ export async function seedDevelopmentData(sql: DatabaseClient): Promise<void> {
               'eligible', 'mock', now(), ${transaction.json({ verified: true, developmentSeed: true })})
       on conflict (id) do update set status = 'eligible', verified_at = now(), updated_at = now()
     `;
+    await transaction`update surveys set status='active', updated_at=now() where id=${seedIds.survey12}`;
   });
 }

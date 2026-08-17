@@ -17,7 +17,7 @@ export interface CanonicalVote {
   documentVersion: number;
 }
 
-type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 
 export function deterministicSerialize(value: JsonValue): string {
   if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);

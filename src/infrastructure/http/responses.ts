@@ -3,6 +3,7 @@ import { ApplicationError } from "@/src/application/errors";
 
 const statusByCode: Record<ApplicationError["code"], number> = {
   unauthenticated: 401,
+  forbidden: 403,
   invalid_personal_account: 404,
   invalid_survey: 404,
   closed_survey: 409,
@@ -10,6 +11,7 @@ const statusByCode: Record<ApplicationError["code"], number> = {
   invalid_answers: 422,
   invalid_vote_state: 409,
   idempotency_conflict: 409,
+  concurrency_conflict: 409,
   duplicate_vote: 409,
   invalid_request: 400,
   signing_failed: 502,

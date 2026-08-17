@@ -1,5 +1,11 @@
 # Архитектура системы опросов
 
+## Stage 4 administrative bounded context
+
+The administrative UI (`app/admin`) calls server route handlers only. `AdminService` is the application facade, RBAC and survey-management modules hold domain policy, `AdminRepository` is the port, and `PostgresAdminRepository` implements transactional queries and aggregates. It reuses Stage 2.5/3 sessions, votes, signing, documents and audit; there is no second voting backend.
+
+User visibility comes from `/api/surveys`, a trusted participant/survey query. An admin-created survey is the same database object used by voting and canonical document generation, not a browser fixture.
+
 ## Статус документа
 
 Это целевая архитектура и фундамент, а не заявление о production-готовности. Реальные eGov, Digital ID, Астана-ЕРЦ, signing и object storage адаптеры отсутствуют.

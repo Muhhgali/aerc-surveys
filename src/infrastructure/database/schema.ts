@@ -125,6 +125,9 @@ export const surveys = pgTable("surveys", {
   version: integer("version").notNull().default(1),
   titleRu: text("title_ru").notNull(),
   titleKk: text("title_kk"),
+  descriptionRu: text("description_ru").notNull().default(""),
+  descriptionKk: text("description_kk").notNull().default(""),
+  lockVersion: integer("lock_version").notNull().default(1),
   status: surveyStatus("status").notNull().default("draft"),
   startsAt: timestamp("starts_at", { withTimezone: true }),
   closesAt: timestamp("closes_at", { withTimezone: true }),
@@ -132,6 +135,7 @@ export const surveys = pgTable("surveys", {
   ...timestamps,
 }, (table) => [
   uniqueIndex("surveys_org_protocol_unique").on(table.organizationId, table.protocolNumber),
+  index("surveys_status_period_idx").on(table.status, table.startsAt, table.closesAt),
   check("surveys_period_valid", sql`${table.closesAt} is null or ${table.startsAt} is null or ${table.closesAt} > ${table.startsAt}`),
 ]);
 
@@ -147,6 +151,20 @@ export const surveyQuestions = pgTable("survey_questions", {
 }, (table) => [
   uniqueIndex("survey_questions_survey_position_unique").on(table.surveyId, table.position),
   check("survey_questions_position_positive", sql`${table.position} > 0`),
+]);
+
+export const surveyVersions = pgTable("survey_versions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  surveyId: uuid("survey_id").notNull().references(() => surveys.id, { onDelete: "restrict" }),
+  version: integer("version").notNull(),
+  snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull(),
+  sha256: text("sha256").notNull(),
+  publishedByUserId: uuid("published_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  publishedAt: timestamp("published_at", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("survey_versions_survey_version_unique").on(table.surveyId, table.version),
+  check("survey_versions_version_positive", sql`${table.version} > 0`),
 ]);
 
 export const surveyTargets = pgTable("survey_targets", {
@@ -185,6 +203,7 @@ export const surveyParticipants = pgTable("survey_participants", {
 }, (table) => [
   uniqueIndex("survey_participants_identity_property_unique").on(table.surveyId, table.userId, table.propertyId),
   index("survey_participants_survey_idx").on(table.surveyId),
+  index("survey_participants_survey_status_idx").on(table.surveyId, table.status),
 ]);
 
 export const authSessions = pgTable("auth_sessions", {
@@ -232,6 +251,7 @@ export const votes = pgTable("votes", {
   uniqueIndex("votes_one_final_vote_unique").on(table.surveyId, table.userId, table.propertyId).where(sql`${table.status} = 'submitted'`),
   uniqueIndex("votes_one_workflow_unique").on(table.surveyId, table.userId, table.propertyId).where(sql`${table.status} <> 'voided'`),
   index("votes_participant_idx").on(table.participantId),
+  index("votes_survey_status_idx").on(table.surveyId, table.status),
 ]);
 
 export const voteAnswers = pgTable("vote_answers", {
@@ -296,7 +316,11 @@ export const documents = pgTable("documents", {
   status: documentStatus("status").notNull().default("pending"),
   currentVersion: integer("current_version").notNull().default(0),
   ...timestamps,
-}, (table) => [index("documents_survey_idx").on(table.surveyId), uniqueIndex("documents_vote_unique").on(table.voteId).where(sql`${table.voteId} is not null`)]);
+}, (table) => [
+  index("documents_survey_idx").on(table.surveyId),
+  index("documents_survey_created_idx").on(table.surveyId, table.createdAt),
+  uniqueIndex("documents_vote_unique").on(table.voteId).where(sql`${table.voteId} is not null`),
+]);
 
 export const documentVersions = pgTable("document_versions", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -333,8 +357,48 @@ export const auditLogs = pgTable("audit_logs", {
 }, (table) => [
   index("audit_logs_request_idx").on(table.requestId),
   index("audit_logs_actor_idx").on(table.actorUserId),
+  index("audit_logs_event_occurred_idx").on(table.eventType, table.occurredAt),
   check("audit_logs_outcome_valid", sql`${table.outcome} in ('success', 'failure')`),
 ]);
+
+export const platformRoles = pgTable("platform_roles", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  key: text("role_key").notNull().unique(),
+  nameRu: text("name_ru").notNull(),
+  descriptionRu: text("description_ru").notNull().default(""),
+  system: boolean("system").notNull().default(true),
+  ...timestamps,
+});
+
+export const platformPermissions = pgTable("platform_permissions", {
+  key: text("permission_key").primaryKey(),
+  descriptionRu: text("description_ru").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const rolePermissions = pgTable("role_permissions", {
+  roleId: uuid("role_id").notNull().references(() => platformRoles.id, { onDelete: "cascade" }),
+  permissionKey: text("permission_key").notNull().references(() => platformPermissions.key, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [primaryKey({ columns: [table.roleId, table.permissionKey] })]);
+
+export const userPlatformRoles = pgTable("user_platform_roles", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  roleId: uuid("role_id").notNull().references(() => platformRoles.id, { onDelete: "restrict" }),
+  assignedByUserId: uuid("assigned_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.roleId] }),
+  index("user_platform_roles_role_idx").on(table.roleId, table.userId),
+]);
+
+export const platformAccessControls = pgTable("platform_access_controls", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  disabledAt: timestamp("disabled_at", { withTimezone: true }),
+  disabledByUserId: uuid("disabled_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  reason: text("reason"),
+  ...timestamps,
+});
 
 export const integrationRequests = pgTable("integration_requests", {
   id: uuid("id").defaultRandom().primaryKey(),

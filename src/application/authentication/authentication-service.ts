@@ -12,11 +12,11 @@ export class AuthenticationService {
     private readonly sessions: SessionService,
   ) {}
 
-  async authenticateMock(callbackUri: string, context: RequestContext): Promise<{ credential: SessionCredential; user: CurrentUser }> {
+  async authenticateMock(callbackUri: string, context: RequestContext, identity = "voter"): Promise<{ credential: SessionCredential; user: CurrentUser }> {
     if (this.provider.name !== "mock") throw new ApplicationError("not_found", "Mock authentication is unavailable");
     const challenge = await this.provider.startAuthentication({ callbackUri }, context);
     if (!challenge.ok) throw new ApplicationError("unauthenticated", "Identity authentication could not be started");
-    const verified = await this.provider.completeAuthentication({ challengeId: challenge.value.challengeId, response: "approved" }, context);
+    const verified = await this.provider.completeAuthentication({ challengeId: challenge.value.challengeId, response: identity === "admin" ? "approved-admin" : "approved" }, context);
     if (!verified.ok) throw new ApplicationError("unauthenticated", "Identity verification failed");
     const user = await this.identities.resolveVerifiedIdentity(this.provider.name, verified.value);
     if (!user) throw new ApplicationError("unauthenticated", "Verified identity is not registered");
