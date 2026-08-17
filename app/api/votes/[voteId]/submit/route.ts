@@ -20,8 +20,8 @@ export async function POST(request: Request, context: { params: Promise<{ voteId
       subjectId: voteId, requestId, occurredAt: new Date().toISOString(), outcome: "success",
       metadata: { subjectType: "vote" },
     });
-    const vote = await app.voting.submit({ voteId, userId: session.subjectId, authSessionId: session.sessionId, idempotencyKey: input.idempotencyKey, requestId });
-    return Response.json({ vote: { id: vote.id, surveyId: vote.surveyId, status: vote.status, submittedAt: vote.submittedAt }, requestId });
+    const document = await app.documents.signGenerateAndSubmit({ voteId, userId: session.subjectId, authSessionId: session.sessionId, idempotencyKey: input.idempotencyKey, verificationBaseUrl: new URL(request.url).origin }, { requestId });
+    return Response.json({ vote: { id: voteId, status: "submitted" }, document: { id: document.publicId, version: document.version, sha256: document.sha256, verificationUrl: `/verify/${document.publicId}` }, requestId });
   } catch (error) {
     return errorResponse(error, requestId);
   }

@@ -7,7 +7,7 @@ let database: PGlite;
 
 beforeAll(async () => {
   database = new PGlite();
-  for (const file of ["0000_production_data_model.sql", "0001_regular_madelyne_pryor.sql"]) {
+  for (const file of ["0000_production_data_model.sql", "0001_regular_madelyne_pryor.sql", "0002_superb_zodiak.sql", "0003_vote_document_immutability.sql"]) {
     const migration = await readFile(resolve(process.cwd(), `drizzle/${file}`), "utf8");
     await database.exec(migration.replaceAll("--> statement-breakpoint", ""));
   }
@@ -27,7 +27,7 @@ describe("PostgreSQL migration", () => {
     for (const table of [
       "users", "external_identities", "organizations", "organization_members", "properties", "personal_accounts",
       "surveys", "survey_questions", "survey_targets", "survey_participants", "vote_sessions", "votes", "vote_answers",
-      "vote_autosaves", "signature_requests", "documents", "document_versions", "audit_logs", "integration_requests",
+      "vote_autosaves", "binary_assets", "visual_signatures", "signature_requests", "documents", "document_versions", "audit_logs", "integration_requests",
     ]) expect(tables.has(table), `${table} is missing`).toBe(true);
   });
 
@@ -50,5 +50,57 @@ describe("PostgreSQL migration", () => {
       insert into votes (vote_session_id, survey_id, participant_id, user_id, property_id, status, idempotency_key, submitted_at)
       values ('10000000-0000-4000-8000-000000000008', '10000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000005', '10000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000003', 'submitted', 'vote-idem-2', now());
     `)).rejects.toMatchObject({ code: "23505" });
+  });
+
+  it("enforces lifecycle and immutable answers in PostgreSQL", async () => {
+    await database.exec(`
+      insert into properties (id, city, street, building, premise, property_type) values ('20000000-0000-4000-8000-000000000003', 'Astana', 'Street', '1', '2', 'apartment');
+      insert into survey_participants (id, survey_id, user_id, property_id, status, verified_source, verified_at)
+        values ('20000000-0000-4000-8000-000000000005', '10000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000003', 'eligible', 'test', now());
+      insert into vote_sessions (id, auth_session_id, participant_id, status, idempotency_key, expires_at)
+      values ('20000000-0000-4000-8000-000000000007', '10000000-0000-4000-8000-000000000006', '20000000-0000-4000-8000-000000000005', 'draft', 'immut-session', now() + interval '1 hour');
+      insert into votes (id, vote_session_id, survey_id, participant_id, user_id, property_id, status, idempotency_key)
+      values ('20000000-0000-4000-8000-000000000009', '20000000-0000-4000-8000-000000000007', '10000000-0000-4000-8000-000000000004', '20000000-0000-4000-8000-000000000005', '10000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000003', 'draft', 'immut-vote');
+      insert into survey_questions (id, survey_id, position, text_ru) values ('20000000-0000-4000-8000-000000000010', '10000000-0000-4000-8000-000000000004', 1, 'Question');
+      insert into vote_answers (vote_id, question_id, choice) values ('20000000-0000-4000-8000-000000000009', '20000000-0000-4000-8000-000000000010', 'for');
+      update votes set status = 'ready_to_sign', canonical_payload = '{}', canonical_sha256 = repeat('a', 64) where id = '20000000-0000-4000-8000-000000000009';
+    `);
+    await expect(database.exec(`update vote_answers set choice = 'against' where vote_id = '20000000-0000-4000-8000-000000000009'`)).rejects.toMatchObject({ code: "23514" });
+    await expect(database.exec(`update votes set status = 'submitted' where id = '20000000-0000-4000-8000-000000000009'`)).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("prevents document and binary asset tampering", async () => {
+    await database.exec(`
+      insert into binary_assets (storage_key, content_type, bytes, sha256, size_bytes) values ('test/immutable.pdf', 'application/pdf', decode('25504446','hex'), repeat('a',64), 4);
+      insert into documents (id, public_id, survey_id, document_type, status, current_version) values ('21000000-0000-4000-8000-000000000001', '21000000-0000-5000-a000-000000000002', '10000000-0000-4000-8000-000000000004', 'voting_sheet', 'generated', 1);
+      insert into document_versions (document_id, version, survey_version, storage_key, content_type, sha256, canonical_sha256, signing_provider, signing_status, verification_reference, size_bytes) values ('21000000-0000-4000-8000-000000000001', 1, 1, 'test/immutable.pdf', 'application/pdf', repeat('a',64), repeat('b',64), 'mock', 'finalized', '/verify/test', 4);
+    `);
+    await expect(database.exec(`update document_versions set sha256=repeat('c',64) where document_id='21000000-0000-4000-8000-000000000001'`)).rejects.toMatchObject({ code: "23514" });
+    await expect(database.exec(`update binary_assets set bytes=decode('00','hex') where storage_key='test/immutable.pdf'`)).rejects.toMatchObject({ code: "23514" });
+  });
+});
+
+describe("Stage 2.5 upgrade migration", () => {
+  it("preserves sessions, drafts and answers while upgrading to Stage 3", async () => {
+    const upgraded = new PGlite();
+    try {
+      for (const file of ["0000_production_data_model.sql", "0001_regular_madelyne_pryor.sql"]) await upgraded.exec((await readFile(resolve(process.cwd(), `drizzle/${file}`), "utf8")).replaceAll("--> statement-breakpoint", ""));
+      await upgraded.exec(`
+        insert into users (id, display_name) values ('30000000-0000-4000-8000-000000000001', 'Upgrade voter');
+        insert into organizations (id, bin, legal_name, display_name, type) values ('30000000-0000-4000-8000-000000000002', 'UPGRADE', 'Upgrade', 'Upgrade', 'osi');
+        insert into properties (id, city, street, building, premise, property_type) values ('30000000-0000-4000-8000-000000000003', 'Astana', 'Street', '1', '2', 'apartment');
+        insert into personal_accounts (id, external_account_id, account_number, property_id) values ('30000000-0000-4000-8000-000000000004', 'upgrade-account', '3000', '30000000-0000-4000-8000-000000000003');
+        insert into surveys (id, organization_id, protocol_number, title_ru, status) values ('30000000-0000-4000-8000-000000000005', '30000000-0000-4000-8000-000000000002', 'U1', 'Upgrade survey', 'active');
+        insert into survey_questions (id, survey_id, position, text_ru) values ('30000000-0000-4000-8000-000000000006', '30000000-0000-4000-8000-000000000005', 1, 'Upgrade question');
+        insert into survey_participants (id, survey_id, user_id, property_id, personal_account_id, status, verified_source, verified_at) values ('30000000-0000-4000-8000-000000000007', '30000000-0000-4000-8000-000000000005', '30000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000003', '30000000-0000-4000-8000-000000000004', 'eligible', 'test', now());
+        insert into auth_sessions (id, token_hash, user_id, assurance_level, expires_at) values ('30000000-0000-4000-8000-000000000008', 'upgrade-token-hash', '30000000-0000-4000-8000-000000000001', 'demo', now() + interval '1 hour');
+        insert into vote_sessions (id, auth_session_id, participant_id, status, idempotency_key, expires_at) values ('30000000-0000-4000-8000-000000000009', '30000000-0000-4000-8000-000000000008', '30000000-0000-4000-8000-000000000007', 'started', 'upgrade-session', now() + interval '1 hour');
+        insert into votes (id, vote_session_id, survey_id, participant_id, user_id, property_id, status, idempotency_key) values ('30000000-0000-4000-8000-000000000010', '30000000-0000-4000-8000-000000000009', '30000000-0000-4000-8000-000000000005', '30000000-0000-4000-8000-000000000007', '30000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000003', 'draft', 'upgrade-vote');
+        insert into vote_answers (vote_id, question_id, choice) values ('30000000-0000-4000-8000-000000000010', '30000000-0000-4000-8000-000000000006', 'abstain');
+      `);
+      for (const file of ["0002_superb_zodiak.sql", "0003_vote_document_immutability.sql"]) await upgraded.exec((await readFile(resolve(process.cwd(), `drizzle/${file}`), "utf8")).replaceAll("--> statement-breakpoint", ""));
+      const result = await upgraded.query<{ vote_status: string; session_status: string; choice: string; token_hash: string }>(`select v.status as vote_status, vs.status as session_status, va.choice, a.token_hash from votes v join vote_sessions vs on vs.id=v.vote_session_id join vote_answers va on va.vote_id=v.id join auth_sessions a on a.id=vs.auth_session_id where v.id='30000000-0000-4000-8000-000000000010'`);
+      expect(result.rows[0]).toEqual({ vote_status: "draft", session_status: "draft", choice: "abstain", token_hash: "upgrade-token-hash" });
+    } finally { await upgraded.close(); }
   });
 });

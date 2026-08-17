@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   boolean,
   check,
+  customType,
   index,
   integer,
   jsonb,
@@ -13,6 +14,8 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+
+const bytea = customType<{ data: Buffer }>({ dataType: () => "bytea" });
 
 const timestamps = {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -28,10 +31,10 @@ export const surveyStatus = pgEnum("survey_status", ["draft", "scheduled", "acti
 export const questionStatus = pgEnum("question_status", ["active", "inactive"]);
 export const surveyTargetType = pgEnum("survey_target_type", ["building", "property", "organization", "personal_account"]);
 export const participantStatus = pgEnum("participant_status", ["eligible", "ineligible", "revoked"]);
-export const voteSessionStatus = pgEnum("vote_session_status", ["started", "ready_to_sign", "signed", "submitted", "expired", "cancelled"]);
-export const voteStatus = pgEnum("vote_status", ["draft", "submitted", "invalidated"]);
+export const voteSessionStatus = pgEnum("vote_session_status", ["draft", "ready_to_sign", "signing", "signed", "submitted", "voided"]);
+export const voteStatus = pgEnum("vote_status", ["draft", "ready_to_sign", "signing", "signed", "submitted", "voided"]);
 export const voteChoice = pgEnum("vote_choice", ["for", "against", "abstain"]);
-export const signatureStatus = pgEnum("signature_status", ["pending", "completed", "failed", "expired", "cancelled"]);
+export const signatureStatus = pgEnum("signature_status", ["created", "pending", "verified", "finalized", "failed", "expired", "cancelled"]);
 export const documentStatus = pgEnum("document_status", ["pending", "generated", "failed", "archived"]);
 export const integrationStatus = pgEnum("integration_status", ["started", "succeeded", "failed", "timed_out"]);
 
@@ -119,6 +122,7 @@ export const surveys = pgTable("surveys", {
   id: uuid("id").defaultRandom().primaryKey(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "restrict" }),
   protocolNumber: text("protocol_number").notNull(),
+  version: integer("version").notNull().default(1),
   titleRu: text("title_ru").notNull(),
   titleKk: text("title_kk"),
   status: surveyStatus("status").notNull().default("draft"),
@@ -197,7 +201,7 @@ export const voteSessions = pgTable("vote_sessions", {
   id: uuid("id").defaultRandom().primaryKey(),
   authSessionId: uuid("auth_session_id").notNull().references(() => authSessions.id, { onDelete: "restrict" }),
   participantId: uuid("participant_id").notNull().references(() => surveyParticipants.id, { onDelete: "restrict" }),
-  status: voteSessionStatus("status").notNull().default("started"),
+  status: voteSessionStatus("status").notNull().default("draft"),
   idempotencyKey: text("idempotency_key").notNull().unique(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   submittedAt: timestamp("submitted_at", { withTimezone: true }),
@@ -215,12 +219,18 @@ export const votes = pgTable("votes", {
   idempotencyKey: text("idempotency_key").notNull().unique(),
   submitIdempotencyKey: text("submit_idempotency_key").unique(),
   stateVersion: integer("state_version").notNull().default(1),
+  canonicalPayload: jsonb("canonical_payload").$type<Record<string, unknown>>(),
+  canonicalSha256: text("canonical_sha256"),
+  signedSha256: text("signed_sha256"),
+  signingProvider: text("signing_provider"),
+  readyAt: timestamp("ready_at", { withTimezone: true }),
+  signedAt: timestamp("signed_at", { withTimezone: true }),
   submittedAt: timestamp("submitted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("votes_one_final_vote_unique").on(table.surveyId, table.userId, table.propertyId).where(sql`${table.status} = 'submitted'`),
-  uniqueIndex("votes_one_workflow_unique").on(table.surveyId, table.userId, table.propertyId).where(sql`${table.status} <> 'invalidated'`),
+  uniqueIndex("votes_one_workflow_unique").on(table.surveyId, table.userId, table.propertyId).where(sql`${table.status} <> 'voided'`),
   index("votes_participant_idx").on(table.participantId),
 ]);
 
@@ -241,36 +251,66 @@ export const voteAutosaves = pgTable("vote_autosaves", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [index("vote_autosaves_vote_idx").on(table.voteId)]);
 
+export const binaryAssets = pgTable("binary_assets", {
+  storageKey: text("storage_key").primaryKey(),
+  contentType: text("content_type").notNull(),
+  bytes: bytea("bytes").notNull(),
+  sha256: text("sha256").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [check("binary_assets_size_nonnegative", sql`${table.sizeBytes} >= 0`)]);
+
+export const visualSignatures = pgTable("visual_signatures", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  voteId: uuid("vote_id").notNull().references(() => votes.id, { onDelete: "restrict" }).unique(),
+  storageKey: text("storage_key").notNull().references(() => binaryAssets.storageKey, { onDelete: "restrict" }),
+  sha256: text("sha256").notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const signatureRequests = pgTable("signature_requests", {
   id: uuid("id").defaultRandom().primaryKey(),
   voteSessionId: uuid("vote_session_id").notNull().references(() => voteSessions.id, { onDelete: "restrict" }),
+  voteId: uuid("vote_id").notNull().references(() => votes.id, { onDelete: "restrict" }),
   provider: text("provider").notNull(),
   providerRequestId: text("provider_request_id"),
   documentDigest: text("document_digest").notNull(),
-  status: signatureStatus("status").notNull().default("pending"),
+  status: signatureStatus("status").notNull().default("created"),
   evidenceReference: text("evidence_reference"),
+  evidence: jsonb("evidence").$type<Record<string, unknown>>(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   ...timestamps,
-}, (table) => [uniqueIndex("signature_requests_provider_request_unique").on(table.provider, table.providerRequestId).where(sql`${table.providerRequestId} is not null`)]);
+}, (table) => [
+  uniqueIndex("signature_requests_provider_request_unique").on(table.provider, table.providerRequestId).where(sql`${table.providerRequestId} is not null`),
+  uniqueIndex("signature_requests_active_vote_unique").on(table.voteId).where(sql`${table.status} in ('created', 'pending', 'verified')`),
+]);
 
 export const documents = pgTable("documents", {
   id: uuid("id").defaultRandom().primaryKey(),
+  publicId: uuid("public_id").defaultRandom().notNull().unique(),
   voteId: uuid("vote_id").references(() => votes.id, { onDelete: "restrict" }),
   surveyId: uuid("survey_id").notNull().references(() => surveys.id, { onDelete: "restrict" }),
   type: text("document_type").notNull(),
   status: documentStatus("status").notNull().default("pending"),
   currentVersion: integer("current_version").notNull().default(0),
   ...timestamps,
-}, (table) => [index("documents_survey_idx").on(table.surveyId)]);
+}, (table) => [index("documents_survey_idx").on(table.surveyId), uniqueIndex("documents_vote_unique").on(table.voteId).where(sql`${table.voteId} is not null`)]);
 
 export const documentVersions = pgTable("document_versions", {
   id: uuid("id").defaultRandom().primaryKey(),
   documentId: uuid("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
   version: integer("version").notNull(),
+  surveyVersion: integer("survey_version").notNull(),
   storageKey: text("storage_key").notNull().unique(),
   contentType: text("content_type").notNull(),
   sha256: text("sha256").notNull(),
+  canonicalSha256: text("canonical_sha256").notNull(),
+  signingProvider: text("signing_provider").notNull(),
+  signingStatus: signatureStatus("signing_status").notNull(),
+  verificationReference: text("verification_reference").notNull(),
+  immutable: boolean("immutable").notNull().default(true),
   sizeBytes: integer("size_bytes").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [

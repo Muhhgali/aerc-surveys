@@ -7,7 +7,7 @@
 - Stage 2: PostgreSQL schema, repositories, property/eligibility resolution и базовый voting backend.
 - Stage 2.5: persistent PostgreSQL runtime, hash-based server sessions, full Protocol №12 UI integration, start/resume, per-answer autosave, transactional idempotent submit, health/smoke commands и Playwright security smoke.
 
-## Stage 3 — следующий, но не начат
+## Stage 3 — integrated foundation завершён
 
 - формальная vote state machine для signing lifecycle;
 - deterministic canonical representation и SHA-256;
@@ -25,4 +25,4 @@
 - получить официальные API contracts и юридические требования к ЭЦП до production adapters;
 - провести privacy/security/legal review и controlled pilot.
 
-Stage 3 не запускается автоматически: сначала владелец принимает Stage 2.5 и предоставляет/утверждает staging infrastructure.
+Stage 4 самостоятельно не начат. Перед pilot всё ещё требуются staging infrastructure, официальные integration contracts и security/legal review.

@@ -31,12 +31,7 @@ export async function resetE2eState() {
   const sql = e2eDatabase();
   try {
     await sql.begin(async (transaction) => {
-      await transaction`delete from audit_logs where actor_user_id in (${seedIds.voterUser}, ${foreign.user})`;
-      await transaction`delete from documents where vote_id in (select id from votes where user_id in (${seedIds.voterUser}, ${foreign.user}))`;
-      await transaction`delete from signature_requests where vote_session_id in (select id from vote_sessions where participant_id in (${seedIds.participant}, ${foreign.participant}))`;
-      await transaction`delete from votes where user_id in (${seedIds.voterUser}, ${foreign.user})`;
-      await transaction`delete from vote_sessions where participant_id in (${seedIds.participant}, ${foreign.participant})`;
-      await transaction`delete from auth_sessions where user_id in (${seedIds.voterUser}, ${foreign.user})`;
+      await transaction`truncate table audit_logs, document_versions, documents, signature_requests, visual_signatures, binary_assets, vote_autosaves, vote_answers, votes, vote_sessions, auth_sessions restart identity cascade`;
       await transaction`delete from survey_participants where id = ${foreign.participant}`;
       await transaction`delete from external_identities where user_id = ${foreign.user}`;
       await transaction`delete from users where id = ${foreign.user}`;
@@ -82,7 +77,7 @@ export async function createForeignSession(withVote = false) {
       `;
       await transaction`
         insert into vote_sessions (id, auth_session_id, participant_id, status, idempotency_key, expires_at)
-        values (${foreign.voteSession}, ${foreign.session}, ${foreign.participant}, 'started', '90000000-0000-4000-8000-000000000006', now() + interval '1 day')
+        values (${foreign.voteSession}, ${foreign.session}, ${foreign.participant}, 'draft', '90000000-0000-4000-8000-000000000006', now() + interval '1 day')
       `;
       await transaction`
         insert into votes (id, vote_session_id, survey_id, participant_id, user_id, property_id, status, idempotency_key)

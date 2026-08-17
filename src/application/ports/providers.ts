@@ -40,6 +40,8 @@ export interface SigningRequest {
   verificationUri?: string;
 }
 
+export type SigningLifecycleStatus = "pending" | "ready" | "verified" | "finalized" | "cancelled" | "expired" | "failed";
+
 export interface SigningEvidence {
   evidenceId: string;
   subjectId: string;
@@ -50,8 +52,11 @@ export interface SigningEvidence {
 
 export interface SigningProvider {
   readonly name: "mock" | "egov_qr" | "digital_id";
-  startSigning(input: { subjectId: string; documentDigest: string }, context: RequestContext): Promise<ProviderResult<SigningRequest>>;
-  verifySigning(input: { signingRequestId: string }, context: RequestContext): Promise<ProviderResult<SigningEvidence>>;
+  createSigningRequest(input: { subjectId: string; documentDigest: string }, context: RequestContext): Promise<ProviderResult<SigningRequest>>;
+  getSigningStatus(input: { signingRequestId: string }, context: RequestContext): Promise<ProviderResult<{ status: SigningLifecycleStatus }>>;
+  verifySignature(input: { signingRequestId: string; expectedDocumentDigest: string }, context: RequestContext): Promise<ProviderResult<SigningEvidence>>;
+  cancelSigningRequest(input: { signingRequestId: string }, context: RequestContext): Promise<ProviderResult<{ cancelled: boolean }>>;
+  finalizeSignedDocument(input: { signingRequestId: string; documentDigest: string; finalDocumentSha256: string }, context: RequestContext): Promise<ProviderResult<{ evidenceId: string; finalizedAt: string; finalDocumentSha256: string }>>;
 }
 
 export interface NotificationProvider {
@@ -60,7 +65,7 @@ export interface NotificationProvider {
 }
 
 export interface DocumentStorageProvider {
-  readonly name: "mock" | "object_storage";
+  readonly name: "mock" | "database" | "object_storage";
   put(input: { key: string; contentType: string; bytes: Uint8Array; sha256: string }, context: RequestContext): Promise<ProviderResult<{ storageKey: string; version: string }>>;
   get(input: { storageKey: string }, context: RequestContext): Promise<ProviderResult<{ contentType: string; bytes: Uint8Array; sha256: string }>>;
 }

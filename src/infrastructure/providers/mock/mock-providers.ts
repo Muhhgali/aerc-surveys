@@ -94,22 +94,72 @@ export class MockSigningProvider implements SigningProvider {
   readonly name = "mock" as const;
   constructor(private readonly runtime: MockRuntimeOptions) {}
 
-  startSigning(_: { subjectId: string; documentDigest: string }, context: RequestContext) {
-    return run(this.runtime, context, "signing.start", false, () => ({
-      signingRequestId: randomUUID(),
-      expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-    }));
+  createSigningRequest(input: { subjectId: string; documentDigest: string }, context: RequestContext) {
+    return run(this.runtime, context, "signing.create", false, () => {
+      const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+      const signingRequestId = Buffer.from(JSON.stringify({ subjectId: input.subjectId, digest: input.documentDigest, expiresAt }), "utf8").toString("base64url");
+      if (!mockSigningRequests.has(signingRequestId)) mockSigningRequests.set(signingRequestId, { subjectId: input.subjectId, digest: input.documentDigest, expiresAt, status: "pending" });
+      return { signingRequestId, expiresAt };
+    });
   }
 
-  verifySigning(input: { signingRequestId: string }, context: RequestContext) {
-    return run(this.runtime, context, "signing.verify", true, () => ({
-      evidenceId: randomUUID(),
-      subjectId: "mock-subject-1911",
-      documentDigest: "mock-document-digest",
-      signedAt: new Date().toISOString(),
-      providerReference: input.signingRequestId,
-    }));
+  getSigningStatus(input: { signingRequestId: string }, context: RequestContext) {
+    return run(this.runtime, context, "signing.status", true, () => {
+      const request = mockSigningState(input.signingRequestId);
+      if (new Date(request.expiresAt) <= new Date()) return { status: "expired" as const };
+      if (request.status === "pending") request.status = "ready";
+      return { status: request.status };
+    });
   }
+
+  verifySignature(input: { signingRequestId: string; expectedDocumentDigest: string }, context: RequestContext) {
+    return run(this.runtime, context, "signing.verify", true, () => {
+      const request = mockSigningState(input.signingRequestId);
+      if (request.digest !== input.expectedDocumentDigest) throw new ProviderCallError("conflict", "Document digest does not match signing request");
+      if (["cancelled", "finalized"].includes(request.status) || new Date(request.expiresAt) <= new Date()) throw new ProviderCallError("conflict", "Signing request cannot be verified");
+      request.status = "verified"; request.evidenceId ??= randomUUID(); request.signedAt ??= new Date().toISOString();
+      return { evidenceId: request.evidenceId, subjectId: request.subjectId, documentDigest: request.digest, signedAt: request.signedAt, providerReference: input.signingRequestId };
+    });
+  }
+
+  cancelSigningRequest(input: { signingRequestId: string }, context: RequestContext) {
+    return run(this.runtime, context, "signing.cancel", false, () => {
+      const request = mockSigningState(input.signingRequestId);
+      if (request.status === "finalized") throw new ProviderCallError("conflict", "Finalized signing request cannot be cancelled");
+      request.status = "cancelled";
+      return { cancelled: true };
+    });
+  }
+
+  finalizeSignedDocument(input: { signingRequestId: string; documentDigest: string; finalDocumentSha256: string }, context: RequestContext) {
+    return run(this.runtime, context, "signing.finalize", false, () => {
+      const request = mockSigningState(input.signingRequestId);
+      if (request.digest !== input.documentDigest) throw new ProviderCallError("conflict", "Final document does not match the signing request");
+      if (request.status === "finalized" && request.finalDocumentSha256 === input.finalDocumentSha256) return { evidenceId: request.evidenceId!, finalizedAt: request.finalizedAt!, finalDocumentSha256: input.finalDocumentSha256 };
+      if (request.status !== "verified") throw new ProviderCallError("conflict", "Verified signature is required before finalization");
+      request.status = "finalized"; request.evidenceId ??= randomUUID(); request.finalizedAt = new Date().toISOString(); request.finalDocumentSha256 = input.finalDocumentSha256;
+      return { evidenceId: request.evidenceId, finalizedAt: request.finalizedAt, finalDocumentSha256: input.finalDocumentSha256 };
+    });
+  }
+}
+
+type MockSigningState = { subjectId: string; digest: string; expiresAt: string; status: "pending" | "ready" | "verified" | "finalized" | "cancelled"; evidenceId?: string; signedAt?: string; finalDocumentSha256?: string; finalizedAt?: string };
+const mockSigningRequests = new Map<string, MockSigningState>();
+
+function decodeMockSigningRequest(value: string): { subjectId: string; digest: string; expiresAt: string } {
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
+    if (typeof parsed.subjectId !== "string" || typeof parsed.digest !== "string" || typeof parsed.expiresAt !== "string") throw new Error("invalid");
+    return parsed as { subjectId: string; digest: string; expiresAt: string };
+  } catch {
+    throw new ProviderCallError("not_found", "Signing request was not found");
+  }
+}
+
+function mockSigningState(value: string): MockSigningState {
+  const existing = mockSigningRequests.get(value); if (existing) return existing;
+  const decoded = decodeMockSigningRequest(value); const restored: MockSigningState = { ...decoded, status: "pending" };
+  mockSigningRequests.set(value, restored); return restored;
 }
 
 export class MockNotificationProvider implements NotificationProvider {

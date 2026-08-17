@@ -5,6 +5,9 @@ import { SessionService } from "@/src/application/session/session-service";
 import { OrganizationService } from "@/src/application/organization/organization-service";
 import { PropertyService } from "@/src/application/property/property-service";
 import { VoteService } from "@/src/application/voting/vote-service";
+import { VoteLifecycleService } from "@/src/application/voting/vote-lifecycle-service";
+import { VisualSignatureService } from "@/src/application/voting/visual-signature-service";
+import { DocumentLifecycleService } from "@/src/application/documents/document-lifecycle-service";
 import { loadProviderConfig } from "@/src/infrastructure/config/provider-config";
 import { getDatabaseClient } from "@/src/infrastructure/database/client";
 import {
@@ -15,6 +18,7 @@ import {
   PostgresVotingRepository,
 } from "@/src/infrastructure/database/postgres-repositories";
 import { consoleLogger } from "@/src/infrastructure/logging/structured-logger";
+import { PdfKitVotingSheetRenderer } from "@/src/infrastructure/documents/pdfkit-voting-sheet-renderer";
 import { createProviderRegistry } from "@/src/infrastructure/providers/registry";
 import { PostgresSessionStore } from "@/src/infrastructure/session/postgres-session-store";
 
@@ -24,8 +28,8 @@ export function createApplication() {
   if (config.sessionStore !== "database") {
     throw new Error("This backend requires SESSION_STORE=database; in-memory sessions are test-only");
   }
-  const providers = createProviderRegistry(config, consoleLogger);
   const database = getDatabaseClient();
+  const providers = createProviderRegistry(config, consoleLogger, database);
   const accounts = new PostgresPersonalAccountRepository(database);
   const identities = new PostgresAuthenticationRepository(database);
   const votingRepository = new PostgresVotingRepository(database);
@@ -35,6 +39,9 @@ export function createApplication() {
   const authentication = new AuthenticationService(providers.identity, identities, sessions);
   const properties = new PropertyService(providers.property, accounts);
   const voting = new VoteService(votingRepository);
+  const lifecycle = new VoteLifecycleService(votingRepository, votingRepository);
+  const visualSignatures = new VisualSignatureService(votingRepository, votingRepository, providers.documentStorage);
+  const documents = new DocumentLifecycleService(lifecycle, votingRepository, providers.signing, providers.documentStorage, new PdfKitVotingSheetRenderer());
   const organizations = new OrganizationService(membershipRepository);
-  return { config, providers, database, sessions, authentication, properties, voting, organizations, audit };
+  return { config, providers, database, sessions, authentication, properties, voting, lifecycle, visualSignatures, documents, organizations, audit };
 }

@@ -36,4 +36,4 @@
 
 До public pilot нужны: официальный threat model/DPIA, legal signing decision, platform WAF/rate limits, CSP и security headers, trusted proxy policy, RBAC/admin boundary, append-only/tamper-evident audit, least-privilege DB roles, secret rotation, encryption/residency policy, backups + restore rehearsal, SAST/DAST/dependency policy, monitoring/SLO и incident response runbooks.
 
-Canvas-росчерк не является юридической ЭЦП и на этом этапе не сохраняется на сервере. Зарезервированные signing/document tables не означают реализованный signing lifecycle.
+Canvas-росчерк сохраняется как отдельный `visual_signature`, но не является юридической ЭЦП. Canonical snapshot, signing lifecycle и PDF создаются только из trusted server/database state; public verify не раскрывает account, participant или raw assets.

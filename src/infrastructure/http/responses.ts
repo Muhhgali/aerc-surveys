@@ -11,6 +11,9 @@ const statusByCode: Record<ApplicationError["code"], number> = {
   invalid_vote_state: 409,
   idempotency_conflict: 409,
   duplicate_vote: 409,
+  invalid_request: 400,
+  signing_failed: 502,
+  document_failed: 500,
   not_found: 404,
 };
 
@@ -50,6 +53,7 @@ export function errorResponse(error: unknown, requestId: string): Response {
   if (error instanceof ApplicationError) {
     return Response.json({ error: { code: error.code, message: error.message, requestId } }, { status: statusByCode[error.code] });
   }
-  console.error(JSON.stringify({ level: "error", event: "http.unhandled_error", requestId }));
+  const detail = error instanceof Error ? { errorName: error.name, errorMessage: error.message } : {};
+  console.error(JSON.stringify({ level: "error", event: "http.unhandled_error", requestId, ...detail }));
   return Response.json({ error: { code: "internal_error", message: "Unexpected server error", requestId } }, { status: 500 });
 }

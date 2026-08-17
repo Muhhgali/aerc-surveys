@@ -65,25 +65,45 @@ test("happy path persists answers across refresh and submits idempotently", asyn
   await page.getByRole("button", { name: /Подтвердить и отправить/ }).click();
   await page.getByRole("dialog").getByRole("button", { name: /Отправить голосование/ }).click();
   await expect(page.getByRole("heading", { name: "Голос принят" })).toBeVisible();
-  const voteId = (await page.locator(".document-id").textContent())?.trim();
-  expect(voteId).toMatch(/^[0-9a-f-]{36}$/);
-  if (!voteId) throw new Error("Submitted vote ID is missing");
+  const documentId = (await page.locator(".document-id").textContent())?.trim();
+  expect(documentId).toMatch(/^[0-9a-f-]{36}$/);
+  if (!documentId) throw new Error("Final document ID is missing");
+
+  await page.goto(`/verify/${documentId}`);
+  await expect(page.getByRole("heading", { name: "Документ найден" })).toBeVisible();
+  await expect(page.getByText("Подтверждена")).toBeVisible();
+  const pdfResponse = await page.request.get(`/api/documents/${documentId}/pdf`);
+  expect(pdfResponse.status()).toBe(200); expect(pdfResponse.headers()["content-type"]).toBe("application/pdf"); expect((await pdfResponse.body()).subarray(0, 5).toString()).toBe("%PDF-");
+
+  const sql = e2eDatabase();
+  const [document] = await sql<{ voteId: string; documentSha256: string; assetSha256: string }[]>`
+    select d.vote_id as "voteId", dv.sha256 as "documentSha256", ba.sha256 as "assetSha256"
+    from documents d join document_versions dv on dv.document_id=d.id and dv.version=d.current_version
+    join binary_assets ba on ba.storage_key=dv.storage_key where d.public_id=${documentId}
+  `;
+  expect(document.documentSha256).toBe(document.assetSha256);
+  const voteId = document.voteId;
 
   const duplicate = await page.request.post(`/api/votes/${voteId}/submit`, {
     headers: { origin: "http://127.0.0.1:3100" }, data: { idempotencyKey: crypto.randomUUID() },
   });
   expect(duplicate.status()).toBe(200);
 
-  const sql = e2eDatabase();
   try {
     const [{ answers }] = await sql<{ answers: number }[]>`select count(*)::int as answers from vote_answers where vote_id = ${voteId}`;
     expect(answers).toBe(6);
     const audit = await sql<{ event_type: string; metadata: unknown }[]>`select event_type, metadata from audit_logs where actor_user_id = '00000000-0000-4000-8000-000000000001'`;
     const events = new Set(audit.map((event) => event.event_type));
-    for (const expected of ["AUTH_SUCCESS", "SESSION_CREATED", "PERSONAL_ACCOUNT_LOOKUP", "PROPERTY_RESOLVED", "ELIGIBILITY_RESOLVED", "SURVEY_OPENED", "VOTE_STARTED", "VOTE_ANSWER_CHANGED", "VOTE_SUBMIT_ATTEMPT", "VOTE_SUBMITTED"]) {
+    for (const expected of ["AUTH_SUCCESS", "SESSION_CREATED", "PERSONAL_ACCOUNT_LOOKUP", "PROPERTY_RESOLVED", "ELIGIBILITY_RESOLVED", "SURVEY_OPENED", "VOTE_STARTED", "VOTE_ANSWER_CHANGED", "VOTE_SUBMIT_ATTEMPT", "VOTE_READY", "SIGNATURE_STARTED", "SIGNATURE_COMPLETED", "DOCUMENT_GENERATED", "VOTE_SUBMITTED"]) {
       expect(events.has(expected), `${expected} audit event is missing`).toBe(true);
     }
+    const [signature] = await sql<{ voteId: string; status: string }[]>`select vote_id as "voteId", status from signature_requests where vote_id=${voteId}`;
+    expect(signature).toEqual({ voteId, status: "finalized" });
     expect(JSON.stringify(audit)).not.toMatch(/aerc_session|data:image|session-token|password/i);
+    await createForeignSession();
+    const foreign = await request.newContext({ baseURL: "http://127.0.0.1:3100", extraHTTPHeaders: { cookie: `aerc_session=${foreignSessionToken}` } });
+    expect((await foreign.get(`/api/documents/${documentId}/pdf`)).status()).toBe(404);
+    await foreign.dispose();
   } finally { await sql.end(); }
 });
 
@@ -145,4 +165,10 @@ test("prevents access to another user's vote", async ({ page }) => {
     data: { idempotencyKey: crypto.randomUUID(), questionId: questionIds[0], choice: "for" },
   });
   expect(response.status()).toBe(404);
+});
+
+test("public verification rejects invalid IDs without exposing PII", async ({ page }) => {
+  await page.goto("/verify/not-a-document-id");
+  await expect(page.getByRole("heading", { name: "Документ не найден" })).toBeVisible();
+  await expect(page.locator("main")).not.toContainText("1911");
 });

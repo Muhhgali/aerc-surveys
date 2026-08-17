@@ -15,6 +15,20 @@
       "when": 1786710768261,
       "tag": "0001_regular_madelyne_pryor",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786942836973,
+      "tag": "0002_superb_zodiak",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786943000000,
+      "tag": "0003_vote_document_immutability",
+      "breakpoints": true
     }
   ]
 }

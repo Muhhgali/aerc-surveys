@@ -20,7 +20,7 @@ type SaveStatus = "idle" | "saving" | "saved" | "error";
 type VoteApiDto = {
   id: string;
   surveyId: string;
-  status: "draft" | "submitted";
+  status: "draft" | "ready_to_sign" | "signing" | "signed" | "submitted" | "voided";
   stateVersion: number;
   submittedAt: string | null;
   answers: { questionId: string; choice: "for" | "against" | "abstain" }[];
@@ -75,13 +75,14 @@ export default function SurveyApp() {
   const [submitting, setSubmitting] = useState(false);
   const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "anonymous">("checking");
   const [activeVoteId, setActiveVoteId] = useState("");
+  const [finalizedDocumentId, setFinalizedDocumentId] = useState("");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const idempotencyKey = useRef("");
   const [hydrated, setHydrated] = useState(false);
   const selectedSurvey = surveys.find((survey) => survey.id === selectedSurveyId) || surveys[0];
   const selectedArchive = archivedSheets.find((sheet) => sheet.id === selectedArchiveId) || archivedSheets[0];
   const questions = selectedSurvey.questions;
-  const documentId = `AERC-VOTE-2026-${selectedSurvey.protocol.padStart(6, "0")}52`;
+  const documentId = finalizedDocumentId || activeVoteId || `AERC-VOTE-2026-${selectedSurvey.protocol.padStart(6, "0")}52`;
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -166,7 +167,7 @@ export default function SurveyApp() {
   const openSurvey = (surveyId: string, next: "intro" | "preview") => {
     const survey = surveys.find((item) => item.id === surveyId) || surveys[0];
     idempotencyKey.current = "";
-    setActiveVoteId(""); setSaveStatus("idle"); setAccountDetails(null); setSelectedSurveyId(survey.id); setAnswers(defaultAnswers(survey)); setSignature(""); setSubmittedAt(""); setQuestionIndex(0); setScreen(next);
+    setActiveVoteId(""); setFinalizedDocumentId(""); setSaveStatus("idle"); setAccountDetails(null); setSelectedSurveyId(survey.id); setAnswers(defaultAnswers(survey)); setSignature(""); setSubmittedAt(""); setQuestionIndex(0); setScreen(next);
     window.scrollTo({ top: 0, behavior: "smooth" }); window.history.pushState({}, "", pathFor(next, survey.id, selectedArchiveId));
   };
   const openArchive = (archiveId: string) => {
@@ -192,7 +193,7 @@ export default function SurveyApp() {
   };
   const logout = async () => {
     await fetch("/api/session", { method: "DELETE" }).catch(() => undefined);
-    localStorage.removeItem(STORAGE_KEY); setAuthStatus("anonymous"); setActiveVoteId(""); setSelectedSurveyId(surveys[0].id); setAnswers(defaultAnswers(surveys[0])); setAccount(""); setAccountDetails(null); setSignature(""); setSubmittedAt(""); setAccountStatus("idle"); go("login", true);
+    localStorage.removeItem(STORAGE_KEY); setAuthStatus("anonymous"); setActiveVoteId(""); setFinalizedDocumentId(""); setSelectedSurveyId(surveys[0].id); setAnswers(defaultAnswers(surveys[0])); setAccount(""); setAccountDetails(null); setSignature(""); setSubmittedAt(""); setAccountStatus("idle"); go("login", true);
   };
   const completeAuthentication = async () => {
     const response = await fetch("/api/dev/session", { method: "POST" });
@@ -251,12 +252,20 @@ export default function SurveyApp() {
     setSubmitting(true);
     idempotencyKey.current ||= crypto.randomUUID();
     try {
+      if (signature) {
+        const signatureResponse = await fetch(`/api/votes/${activeVoteId}/visual-signature`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dataUrl: signature }),
+        });
+        if (!signatureResponse.ok) throw new Error("Visual signature upload failed");
+      }
       const response = await fetch(`/api/votes/${activeVoteId}/submit`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ idempotencyKey: idempotencyKey.current }),
       });
       if (!response.ok) throw new Error("Vote submission failed");
+      const result = await response.json() as { document: { id: string } };
+      setFinalizedDocumentId(result.document.id);
       setConfirmOpen(false);
       setSubmittedAt(new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }));
       setToast("Голосование отправлено");
@@ -342,7 +351,7 @@ export default function SurveyApp() {
   </main>{signatureOpen && <SignaturePad onCancel={() => setSignatureOpen(false)} onSave={(value) => { setSignature(value); setSignatureOpen(false); setToast("Визуальная подпись добавлена"); }} />}{confirmOpen && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="confirm-modal"><div className="modal-icon"><ShieldCheck size={26} /></div><h2>Подтверждение</h2><p>Вы ответили на все вопросы. Сервер повторно проверит полноту и право голоса.</p><div className="modal-summary"><span>Протокол №{selectedSurvey.protocol}</span><strong>{questions.length} ответов</strong></div><button className="button button-primary button-full" disabled={submitting} onClick={submitVote}>{submitting ? "Отправляем..." : "Отправить голосование"} <Send size={18} /></button><button className="button button-ghost button-full" disabled={submitting} onClick={() => setConfirmOpen(false)}>Отмена</button></div></div>}</>;
 
   const Success = () => <><AppHeader /><main className="screen-content success-content"><div className="success-animation"><span /><div><Check size={45} /></div><i /><i /><i /><i /></div><span className="eyebrow success-eyebrow">ГОЛОСОВАНИЕ ЗАВЕРШЕНО</span><h1>Голос принят</h1><p className="lead">Ваше голосование успешно зарегистрировано.</p>
-    <section className="receipt-card"><div className="receipt-row"><span><CalendarDays size={18} /> Дата и время</span><strong>20 августа 2026 · {submittedAt || "14:32"}</strong></div><div className="receipt-row"><span><Hash size={18} /> ID голосования</span><strong className="document-id">{activeVoteId || documentId}</strong></div><div className="receipt-row"><span><ShieldCheck size={18} /> Статус</span><strong className="green-text">Отправлено и принято</strong></div></section>
+    <section className="receipt-card"><div className="receipt-row"><span><CalendarDays size={18} /> Дата и время</span><strong>20 августа 2026 · {submittedAt || "14:32"}</strong></div><div className="receipt-row"><span><Hash size={18} /> ID документа</span><strong className="document-id">{documentId}</strong></div><div className="receipt-row"><span><ShieldCheck size={18} /> Статус</span><strong className="green-text">Отправлено и принято</strong></div></section>
     <div className="success-actions"><button className="button button-primary button-full" onClick={() => go("document")}><FileText size={18} /> Открыть демонстрационный лист</button><button className="button button-secondary button-full" onClick={() => go("dashboard")}><Home size={18} /> На главную</button></div><p className="receipt-hint">Ответы и итоговый статус сохранены в PostgreSQL. PDF и ЭЦП относятся к следующему этапу.</p>
   </main></>;
 

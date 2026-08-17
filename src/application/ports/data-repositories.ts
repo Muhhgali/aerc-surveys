@@ -1,5 +1,6 @@
 import type { PropertyAccount } from "@/src/domain/property";
 import type { VoteChoice } from "@/src/domain/voting";
+import type { VoteState } from "@/src/domain/vote-lifecycle";
 
 export interface LocalPersonalAccount extends PropertyAccount {
   localPropertyId: string;
@@ -32,7 +33,7 @@ export interface VoteRecord {
   userId: string;
   propertyId: string;
   idempotencyKey: string;
-  status: "draft" | "submitted" | "invalidated";
+  status: VoteState;
   stateVersion: number;
   submittedAt: string | null;
   accountNumber: string;
@@ -60,7 +61,6 @@ export interface VotingRepository {
   findForUserSurvey(surveyId: string, userId: string): Promise<VoteRecord | null>;
   startOrResume(record: StartOrResumeVoteRecord): Promise<StartOrResumeVoteResult>;
   saveAnswer(record: { voteId: string; userId: string; questionId: string; choice: VoteChoice; idempotencyKey: string; payloadSha256: string; requestId: string }): Promise<VoteRecord>;
-  submitDraft(record: { voteId: string; userId: string; authSessionId: string; idempotencyKey: string; requestId: string }): Promise<VoteRecord>;
 }
 
 export interface OrganizationMembershipRepository {

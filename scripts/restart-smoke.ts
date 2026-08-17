@@ -7,7 +7,7 @@ config({ path: [".env.local", ".env"] });
 
 const baseUrl = "http://127.0.0.1:3101";
 const surveyId = "00000000-0000-4000-8000-000000000012";
-const questionIds = [1, 2, 3].map((number) => `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`);
+const questionIds = [1, 2, 3, 4, 5, 6].map((number) => `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`);
 
 async function isReady() {
   try {
@@ -81,7 +81,7 @@ async function main() {
     if (started.status !== 201) throw new Error(`Vote start failed: ${started.status}`);
     const voteId = ((await started.json()) as { vote: { id: string } }).vote.id;
 
-    for (const [index, questionId] of questionIds.entries()) {
+    for (const [index, questionId] of questionIds.slice(0, 3).entries()) {
       const saved = await jsonRequest(`/api/votes/${voteId}/answers`, {
         method: "PUT", body: JSON.stringify({ questionId, choice: index === 1 ? "against" : "for", idempotencyKey: crypto.randomUUID() }),
       }, cookie);
@@ -97,7 +97,21 @@ async function main() {
     if (!restored.ok) throw new Error(`Vote did not survive restart: ${restored.status}`);
     const vote = (await restored.json()) as { vote: { id: string; answers: unknown[] } };
     if (vote.vote.id !== voteId || vote.vote.answers.length !== 3) throw new Error("Restored vote differs from persistent state");
-    console.log(JSON.stringify({ restart: "passed", session: "restored", voteId, answers: 3 }));
+    for (const [offset, questionId] of questionIds.slice(3).entries()) {
+      const saved = await jsonRequest(`/api/votes/${voteId}/answers`, { method: "PUT", body: JSON.stringify({ questionId, choice: offset === 1 ? "abstain" : "for", idempotencyKey: crypto.randomUUID() }) }, cookie);
+      if (!saved.ok) throw new Error(`Post-restart autosave ${offset + 4} failed: ${saved.status}`);
+    }
+    const submitted = await jsonRequest(`/api/votes/${voteId}/submit`, { method: "POST", body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }) }, cookie);
+    if (!submitted.ok) throw new Error(`Document submission failed: ${submitted.status}`);
+    const documentId = ((await submitted.json()) as { document: { id: string } }).document.id;
+
+    await stopServer(replacement);
+    replacement = await startServer();
+    const verification = await jsonRequest(`/verify/${documentId}`, { method: "GET" });
+    if (!verification.ok || !(await verification.text()).includes(documentId)) throw new Error("Final document did not survive restart");
+    const pdf = await jsonRequest(`/api/documents/${documentId}/pdf`, { method: "GET" }, cookie);
+    if (!pdf.ok || pdf.headers.get("content-type") !== "application/pdf" || !Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).equals(Buffer.from("%PDF-"))) throw new Error("Final PDF did not survive restart");
+    console.log(JSON.stringify({ restart: "passed", session: "restored", voteId, answers: 6, documentId, document: "restored" }));
   } finally {
     await stopServer(replacement ?? server);
   }

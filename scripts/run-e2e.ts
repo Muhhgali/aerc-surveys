@@ -50,7 +50,7 @@ async function main() {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
     }
 
-    const tests = spawn(process.execPath, [playwrightCli, "test"], { env: process.env, stdio: "inherit", windowsHide: true });
+    const tests = spawn(process.execPath, [playwrightCli, "test", ...process.argv.slice(2)], { env: process.env, stdio: "inherit", windowsHide: true });
     process.exitCode = await waitForExit(tests);
   } finally {
     await stopProcessTree(server);

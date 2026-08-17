@@ -1,4 +1,6 @@
-# Voting model Stage 2.5
+# Voting model Stage 2.5 + integrated Stage 3
+
+Stage 2.5 start/resume/autosave guarantees remain unchanged. Final submit is now extended by the canonical/signing/document flow described in `docs/vote-document-lifecycle.md`; the older direct-submit description below is retained only as Stage 2.5 history.
 
 ## Start or resume
 

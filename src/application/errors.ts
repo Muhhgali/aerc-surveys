@@ -8,6 +8,9 @@ export type ApplicationErrorCode =
   | "invalid_vote_state"
   | "idempotency_conflict"
   | "duplicate_vote"
+  | "invalid_request"
+  | "signing_failed"
+  | "document_failed"
   | "not_found";
 
 export class ApplicationError extends Error {

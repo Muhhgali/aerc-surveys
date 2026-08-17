@@ -6,7 +6,7 @@ export type ProviderConfig = Readonly<{
   property: "mock" | "aerc";
   signing: "mock" | "egov_qr" | "digital_id";
   notification: "mock" | "disabled";
-  documentStorage: "mock" | "object_storage";
+  documentStorage: "mock" | "database" | "object_storage";
   sessionStore: "memory" | "database";
   providerTimeoutMs: number;
   providerMaxRetries: number;
@@ -27,7 +27,7 @@ const allowed = {
   PROPERTY_PROVIDER: ["mock", "aerc"],
   SIGNING_PROVIDER: ["mock", "egov_qr", "digital_id"],
   NOTIFICATION_PROVIDER: ["mock", "disabled"],
-  DOCUMENT_STORAGE_PROVIDER: ["mock", "object_storage"],
+  DOCUMENT_STORAGE_PROVIDER: ["mock", "database", "object_storage"],
   SESSION_STORE: ["memory", "database"],
 } as const;
 

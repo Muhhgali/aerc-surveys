@@ -9,7 +9,7 @@
 - Property read model: `properties`, `personal_accounts`.
 - Survey: `surveys`, `survey_questions`, `survey_targets`, `survey_participants`.
 - Voting: `vote_sessions`, `votes`, `vote_answers`, `vote_autosaves`.
-- Зарезервировано для следующего этапа: `signature_requests`, `documents`, `document_versions`.
+- Signing/documents: `signature_requests`, `documents`, `document_versions`, `binary_assets`, `visual_signatures`.
 - Traceability: `audit_logs`, `integration_requests`.
 
 `properties` и `personal_accounts` — локальная read model. После подключения Астана-ЕРЦ authoritative ownership/relationship остаётся у внешней системы, а нормализованный результат сохраняется через repository boundary.
@@ -19,7 +19,7 @@
 - `external_identities(provider, provider_subject)` уникален.
 - `auth_sessions.token_hash` уникален; raw token в базе отсутствует.
 - Участник уникален по survey/user/property.
-- Один незавершённый workflow обеспечивается partial unique index по survey/user/property для любого статуса кроме `invalidated`.
+- Один незавершённый workflow обеспечивается partial unique index по survey/user/property для любого статуса кроме `voided`.
 - Второй `submitted` vote запрещён отдельным partial unique index.
 - В `vote_answers` одна строка на `(vote_id, question_id)`; autosave выполняет upsert.
 - `vote_autosaves(vote_id, idempotency_key)` уникален и хранит hash payload для обнаружения replay с другим содержимым.

@@ -32,11 +32,6 @@ export class VoteService {
     return this.votes.saveAnswer({ ...command, payloadSha256 });
   }
 
-  async submit(command: { voteId: string; userId: string; authSessionId: string; idempotencyKey: string; requestId: string }): Promise<VoteRecord> {
-    await this.getOwnedVote(command.voteId, command.userId);
-    return this.votes.submitDraft(command);
-  }
-
   async getOwnedVote(voteId: string, userId: string): Promise<VoteRecord> {
     const vote = await this.votes.findOwnedVote(voteId, userId);
     if (!vote) throw new ApplicationError("not_found", "Vote not found");
