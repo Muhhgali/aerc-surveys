@@ -66,6 +66,15 @@ export async function seedDevelopmentData(sql: DatabaseClient): Promise<void> {
       on conflict (id) do update set status = 'active', last_verified_at = now(), updated_at = now()
     `;
     await transaction`
+      insert into property_holdings (user_id, property_id, personal_account_id, source, status, verified_at)
+      select ${seedIds.voterUser}, ${seedIds.property}, ${seedIds.personalAccount}, 'mock', 'active', now()
+      where not exists (
+        select 1 from property_holdings
+        where user_id = ${seedIds.voterUser} and property_id = ${seedIds.property}
+          and personal_account_id = ${seedIds.personalAccount}
+      )
+    `;
+    await transaction`
       insert into surveys (id, organization_id, protocol_number, title_ru, status, starts_at, closes_at, published_at)
       values (${seedIds.survey12}, ${seedIds.organization}, '12', 'Собрание собственников дома', 'draft',
               '2026-08-01T00:00:00+05:00', '2026-08-25T23:59:59+05:00', '2026-08-01T00:00:00+05:00')

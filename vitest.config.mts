@@ -11,5 +11,8 @@ export default defineConfig({
   test: {
     environment: "node",
     clearMocks: true,
+    // Migration suites boot an in-process PostgreSQL and replay the whole chain.
+    hookTimeout: 60_000,
+    testTimeout: 30_000,
   },
 });

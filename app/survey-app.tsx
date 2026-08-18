@@ -11,7 +11,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { AppHeader, Brand, StepDots } from "./app-chrome";
 import { SignaturePad } from "./signature-pad";
-import { archivedSheets, defaultAnswers, surveys as demoSurveys, type Answer, type Survey } from "./survey-data";
+import { archivedSheets, defaultAnswers, type Answer, type Survey } from "./survey-data";
 import { VotingSheet } from "./voting-sheet";
 
 type Screen = "login" | "verify" | "dashboard" | "archive" | "archiveDocument" | "intro" | "preview" | "account" | "vote" | "review" | "sign" | "success" | "document";
@@ -27,6 +27,12 @@ type VoteApiDto = {
   account: { accountNumber: string; address: string; unit: string };
 };
 type AvailableSurveyDto = { id: string; protocol: string; title: string; subtitle: string; startsAt: string; closesAt: string; status: "active" | "scheduled"; questions: { id: string; position: number; text: string }[] };
+
+// Placeholder shown only while the catalogue is empty; it is never a votable survey.
+const noSurvey: Survey = {
+  id: "", protocol: "—", title: "Нет доступных опросов", subtitle: "Опросы появятся после публикации в административной консоли.",
+  deadline: "", deadlineShort: "", duration: "", status: "soon", questions: [],
+};
 
 function fromAvailableSurvey(survey: AvailableSurveyDto): Survey {
   const closesAt = new Date(survey.closesAt);
@@ -49,6 +55,8 @@ function fromAvailableSurvey(survey: AvailableSurveyDto): Survey {
 const STORAGE_KEY = "aerc-surveys-ui-preferences-v1";
 
 const surveySegments: Partial<Record<Screen, string>> = { preview: "preview", account: "account", vote: "vote", review: "review", sign: "sign", success: "success", document: "document" };
+const surveyScreens: Screen[] = ["intro", "preview", "account", "vote", "review", "sign", "success", "document"];
+const questionScreens: Screen[] = ["vote", "review", "sign", "document"];
 
 function pathFor(screen: Screen, surveyId: string, archiveId: string) {
   if (screen === "login") return "/login";
@@ -80,10 +88,10 @@ export default function SurveyApp() {
   const [account, setAccount] = useState("");
   const [accountStatus, setAccountStatus] = useState<"idle" | "loading" | "found" | "error">("idle");
   const [accountDetails, setAccountDetails] = useState<{ address: string; unit: string } | null>(null);
-  const [surveyCatalog, setSurveyCatalog] = useState<Survey[]>(demoSurveys);
-  const [selectedSurveyId, setSelectedSurveyId] = useState(demoSurveys[0].id);
+  const [surveyCatalog, setSurveyCatalog] = useState<Survey[]>([]);
+  const [selectedSurveyId, setSelectedSurveyId] = useState("");
   const [selectedArchiveId, setSelectedArchiveId] = useState(archivedSheets[0].id);
-  const [answers, setAnswers] = useState<(Answer | null)[]>(defaultAnswers(demoSurveys[0]));
+  const [answers, setAnswers] = useState<(Answer | null)[]>([]);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [signature, setSignature] = useState("");
   const [signatureOpen, setSignatureOpen] = useState(false);
@@ -97,7 +105,11 @@ export default function SurveyApp() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const idempotencyKey = useRef("");
   const [hydrated, setHydrated] = useState(false);
-  const selectedSurvey = surveyCatalog.find((survey) => survey.id === selectedSurveyId) || surveyCatalog[0];
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
+  const selectedSurvey = surveyCatalog.find((survey) => survey.id === selectedSurveyId) || surveyCatalog[0] || noSurvey;
+  // A survey screen for an identity that is not eligible for that survey falls back to the dashboard.
+  const strandedOnSurvey = catalogLoaded && surveyScreens.includes(screen) && !surveyCatalog.some((survey) => survey.id === selectedSurveyId);
+  const visibleScreen: Screen = strandedOnSurvey ? "dashboard" : screen;
   const selectedArchive = archivedSheets.find((sheet) => sheet.id === selectedArchiveId) || archivedSheets[0];
   const questions = selectedSurvey.questions;
   const documentId = finalizedDocumentId || activeVoteId || `AERC-VOTE-2026-${selectedSurvey.protocol.padStart(6, "0")}52`;
@@ -106,35 +118,20 @@ export default function SurveyApp() {
     queueMicrotask(() => {
       try {
         const saved = localStorage.getItem(STORAGE_KEY);
-        if (saved) {
-          const state = JSON.parse(saved) as { screen?: Screen; selectedSurveyId?: string; selectedArchiveId?: string };
-          const route = routeFromPath(window.location.pathname);
-          const surveyId = route?.surveyId || state.selectedSurveyId || demoSurveys[0].id;
-          const survey = demoSurveys.find((item) => item.id === surveyId) || demoSurveys[0];
-          setSelectedSurveyId(survey.id);
-          setSelectedArchiveId(route?.archiveId || state.selectedArchiveId || archivedSheets[0].id);
-          setAnswers(defaultAnswers(survey));
-          const initial = route?.screen || state.screen;
-          if (initial) setScreen(initial);
-        } else {
-          const route = routeFromPath(window.location.pathname);
-          if (route) {
-            setScreen(route.screen);
-            if (route.surveyId) {
-              const survey = demoSurveys.find((item) => item.id === route.surveyId) || demoSurveys[0];
-              setSelectedSurveyId(survey.id); setAnswers(defaultAnswers(survey));
-            }
-            if (route.archiveId) setSelectedArchiveId(route.archiveId);
-          }
-        }
+        const state = saved ? JSON.parse(saved) as { screen?: Screen; selectedSurveyId?: string; selectedArchiveId?: string } : {};
+        const route = routeFromPath(window.location.pathname);
+        setSelectedSurveyId(route?.surveyId || state.selectedSurveyId || "");
+        setSelectedArchiveId(route?.archiveId || state.selectedArchiveId || archivedSheets[0].id);
+        const initial = route?.screen || state.screen;
+        if (initial) setScreen(initial);
       } catch { localStorage.removeItem(STORAGE_KEY); }
       setHydrated(true);
     });
   }, []);
   useEffect(() => {
     if (!hydrated) return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ screen, selectedSurveyId, selectedArchiveId }));
-  }, [screen, selectedSurveyId, selectedArchiveId, hydrated]);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ screen: visibleScreen, selectedSurveyId, selectedArchiveId }));
+  }, [visibleScreen, selectedSurveyId, selectedArchiveId, hydrated]);
   useEffect(() => {
     if (!hydrated) return;
     void fetch("/api/session", { cache: "no-store" }).then((response) => {
@@ -152,16 +149,18 @@ export default function SurveyApp() {
     void fetch("/api/surveys", { cache: "no-store" }).then(async (response) => {
       if (!response.ok) return;
       const payload = await response.json() as { surveys: AvailableSurveyDto[] };
-      const databaseSurveys = payload.surveys.map(fromAvailableSurvey);
-      const catalog = [...databaseSurveys, ...demoSurveys.filter((survey) => !survey.backendId)];
+      const catalog = payload.surveys.map(fromAvailableSurvey);
       setSurveyCatalog(catalog);
       const route = routeFromPath(window.location.pathname);
       if (route?.surveyId) {
         const routed = catalog.find((survey) => survey.id === route.surveyId);
         if (routed) { setSelectedSurveyId(routed.id); setAnswers(defaultAnswers(routed)); }
       }
-    }).catch(() => undefined);
+    }).catch(() => undefined).finally(() => setCatalogLoaded(true));
   }, [authStatus]);
+  useEffect(() => {
+    if (strandedOnSurvey) window.history.replaceState({}, "", "/dashboard");
+  }, [strandedOnSurvey]);
   useEffect(() => {
     if (authStatus !== "authenticated" || activeVoteId || !selectedSurvey.backendId || !(["vote", "review", "sign"] as Screen[]).includes(screen)) return;
     void fetch(`/api/surveys/${selectedSurvey.backendId}/votes`, { cache: "no-store" }).then(async (response) => {
@@ -226,7 +225,7 @@ export default function SurveyApp() {
   };
   const logout = async () => {
     await fetch("/api/session", { method: "DELETE" }).catch(() => undefined);
-    localStorage.removeItem(STORAGE_KEY); setAuthStatus("anonymous"); setActiveVoteId(""); setFinalizedDocumentId(""); setSelectedSurveyId(demoSurveys[0].id); setAnswers(defaultAnswers(demoSurveys[0])); setAccount(""); setAccountDetails(null); setSignature(""); setSubmittedAt(""); setAccountStatus("idle"); go("login", true);
+    localStorage.removeItem(STORAGE_KEY); setAuthStatus("anonymous"); setActiveVoteId(""); setFinalizedDocumentId(""); setSurveyCatalog([]); setSelectedSurveyId(""); setAnswers([]); setAccount(""); setAccountDetails(null); setSignature(""); setSubmittedAt(""); setAccountStatus("idle"); go("login", true);
   };
   const completeAuthentication = async () => {
     const response = await fetch("/api/dev/session", { method: "POST" });
@@ -330,7 +329,8 @@ export default function SurveyApp() {
   const Dashboard = () => <><AppHeader action={<button className="text-action" onClick={logout}>Выйти</button>} /><main className="screen-content dashboard-content">
     <div className="welcome-row"><div><span className="muted">Добрый день!</span><h1>Мои опросы</h1></div><div className="avatar">ОК</div></div>
     <section className="profile-card"><div className="profile-icon"><Building2 size={24} /></div><div className="profile-main"><small>Профиль участника</small><strong>ТОО «ОСИ-КСК»</strong><span>БИН 220740012345</span></div><div className="verified-badge"><ShieldCheck size={14} /> Организация подтверждена</div></section>
-    <div className="section-heading"><h2>Доступные опросы</h2><span>2 активных</span></div>
+    <div className="section-heading"><h2>Доступные опросы</h2><span>{surveyCatalog.filter((survey) => survey.status === "active").length} активных</span></div>
+    {surveyCatalog.length === 0 && <section className="survey-card survey-soon"><h3>{noSurvey.title}</h3><p className="survey-description">{noSurvey.subtitle}</p></section>}
     <div className="survey-stack">{surveyCatalog.map((survey) => <section className={`survey-card ${survey.status === "active" ? "survey-active" : "survey-soon"}`} key={survey.id}><div className="survey-top"><span className={`status-badge ${survey.status === "active" ? "new" : "scheduled"}`}>{survey.status === "active" ? "Открыт" : "Скоро"}</span><div className="survey-symbol"><Vote size={24} /></div></div><small className="protocol">ПРОТОКОЛ №{survey.protocol}</small><h3>{survey.title}</h3><p className="survey-description">{survey.subtitle}</p><div className="survey-meta"><span><CalendarDays size={16} /> {survey.deadline}</span><span><ClipboardCheck size={16} /> {survey.questions.length} вопросов</span></div><div className="survey-actions"><button className="button button-secondary" onClick={() => openSurvey(survey.id, "preview")}><FileText size={17} /> Посмотреть</button>{survey.status === "active" ? <button className="button button-primary" onClick={() => openSurvey(survey.id, "intro")}>Пройти <ArrowRight size={18} /></button> : <button className="button button-muted" disabled>С 1 сентября</button>}</div></section>)}</div>
     <div className="section-heading archive-heading"><h2>Мои опросные листы</h2><button className="text-action" onClick={() => go("archive")}>Все листы <ChevronRight size={15} /></button></div>
     <section className="survey-card survey-complete"><div><span className="status-badge complete"><CheckCircle2 size={13} /> Завершён</span><small>ПРОТОКОЛ №8</small></div><h3>Выбор сервисной компании</h3><p>Голосование завершено 12.06.2026</p><button className="archive-open" onClick={() => openArchive("8")}><FileText size={16} /> Открыть опросный лист <ChevronRight size={16} /></button></section>
@@ -392,9 +392,10 @@ export default function SurveyApp() {
   const ArchiveDocument = () => <VotingSheet onBack={() => go("archive")} protocol={selectedArchive.protocol} title={selectedArchive.title} date={selectedArchive.date} time={selectedArchive.time} documentId={selectedArchive.documentId} address={selectedArchive.address} account={selectedArchive.account} apartment={selectedArchive.apartment} questions={selectedArchive.questions} answers={selectedArchive.answers} archived />;
 
   const content = () => {
-    switch (screen) { case "login": return <Login />; case "verify": return <Verify />; case "dashboard": return <Dashboard />; case "archive": return <ArchiveView />; case "archiveDocument": return <ArchiveDocument />; case "intro": return <Intro />; case "preview": return <Preview />; case "account": return <Account />; case "vote": return <VoteScreen />; case "review": return <Review />; case "sign": return <Sign />; case "success": return <Success />; case "document": return <Document />; }
+    if (questionScreens.includes(visibleScreen) && questions.length === 0) return <div className="app-loading"><Brand /><span className="loader-ring" /></div>;
+    switch (visibleScreen) { case "login": return <Login />; case "verify": return <Verify />; case "dashboard": return <Dashboard />; case "archive": return <ArchiveView />; case "archiveDocument": return <ArchiveDocument />; case "intro": return <Intro />; case "preview": return <Preview />; case "account": return <Account />; case "vote": return <VoteScreen />; case "review": return <Review />; case "sign": return <Sign />; case "success": return <Success />; case "document": return <Document />; }
   };
   if (!hydrated || authStatus === "checking") return <div className="app-loading"><Brand /><span className="loader-ring" /></div>;
-  if (screen === "document" || screen === "archiveDocument") return <div className="presentation document-presentation">{content()}{toast && <div className="toast"><CheckCircle2 size={18} />{toast}</div>}</div>;
-  return <div className="presentation"><aside className="presentation-copy"><Brand /><div className="presentation-main"><span className="presentation-tag"><ShieldCheck size={15} /> ЦИФРОВОЙ СЕРВИС</span><h2>Голосовать удобно.<br />Решать — вместе.</h2><p>Безопасный и прозрачный способ участия собственников в управлении своим домом.</p><div className="presentation-points"><span><Check size={15} /> Подтверждение личности</span><span><Check size={15} /> Электронный документ</span><span><Check size={15} /> Рукописная подпись</span></div></div><div className="presentation-footer">ТОО «Астана-ЕРЦ» · 2026</div></aside><div className="phone-stage"><div className={`phone-shell screen-${screen}`}>{content()}</div><p className="desktop-caption">Интерактивный демонстрационный прототип</p></div>{toast && <div className="toast"><CheckCircle2 size={18} />{toast}</div>}</div>;
+  if (visibleScreen === "document" || visibleScreen === "archiveDocument") return <div className="presentation document-presentation">{content()}{toast && <div className="toast"><CheckCircle2 size={18} />{toast}</div>}</div>;
+  return <div className="presentation"><aside className="presentation-copy"><Brand /><div className="presentation-main"><span className="presentation-tag"><ShieldCheck size={15} /> ЦИФРОВОЙ СЕРВИС</span><h2>Голосовать удобно.<br />Решать — вместе.</h2><p>Безопасный и прозрачный способ участия собственников в управлении своим домом.</p><div className="presentation-points"><span><Check size={15} /> Подтверждение личности</span><span><Check size={15} /> Электронный документ</span><span><Check size={15} /> Рукописная подпись</span></div></div><div className="presentation-footer">ТОО «Астана-ЕРЦ» · 2026</div></aside><div className="phone-stage"><div className={`phone-shell screen-${visibleScreen}`}>{content()}</div><p className="desktop-caption">Интерактивный демонстрационный прототип</p></div>{toast && <div className="toast"><CheckCircle2 size={18} />{toast}</div>}</div>;
 }

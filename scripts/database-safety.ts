@@ -8,6 +8,32 @@ export function requireDatabaseUrl(): string {
   return url;
 }
 
+const previewEnvironments = new Set(["development", "test", "staging"]);
+
+export interface PreviewSeedTarget {
+  url: string;
+  host: string;
+  database: string;
+  environment: string;
+}
+
+/**
+ * Guards the non-production Preview bootstrap. Production is rejected outright and every other
+ * environment must be named explicitly, so this can never become a production seed bypass.
+ */
+export function assertPreviewSeedMutation(): PreviewSeedTarget {
+  const url = requireDatabaseUrl();
+  const environment = process.env.APP_ENV;
+  if (!environment) throw new Error("preview seed requires an explicit APP_ENV");
+  if (environment === "production") throw new Error("preview seed is never allowed when APP_ENV=production");
+  if (!previewEnvironments.has(environment)) throw new Error(`preview seed refuses the unknown environment: ${environment}`);
+  if (process.env.ALLOW_PREVIEW_SEED !== "true") throw new Error("preview seed requires ALLOW_PREVIEW_SEED=true");
+  const parsed = new URL(url);
+  const database = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
+  if (!database) throw new Error("DATABASE_URL must name the target database");
+  return { url, host: parsed.host, database, environment };
+}
+
 export function assertDevelopmentDatabaseMutation(action: "seed" | "reset"): string {
   const url = requireDatabaseUrl();
   if (process.env.APP_ENV !== "development") throw new Error(`${action} is allowed only when APP_ENV=development`);

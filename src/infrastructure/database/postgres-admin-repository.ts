@@ -9,6 +9,7 @@ import type {
 import type { AdminPrincipal, PlatformPermission, PlatformRoleKey } from "@/src/domain/admin-rbac";
 import { assertSurveyTransition, createSurveySnapshot, validateForPublish, type PublishableSurvey, type SurveyStatus } from "@/src/domain/survey-management";
 import type { DatabaseClient } from "@/src/infrastructure/database/client";
+import { availableSurveysSql, materializeSurveyParticipantsSql } from "@/src/infrastructure/database/targeting-sql";
 
 type Sql = DatabaseClient;
 type Tx = postgres.TransactionSql;
@@ -207,19 +208,7 @@ export class PostgresAdminRepository implements AdminRepository {
       await tx`insert into survey_versions (survey_id, version, snapshot, sha256, published_by_user_id) values (${id}, ${details.version}, ${tx.json(frozen.snapshot as postgres.JSONValue)}, ${frozen.sha256}, ${actorId})`;
       const nextStatus = details.startsAt! > new Date() ? "scheduled" : "active";
       await tx`update surveys set status=${nextStatus}, published_at=now(), updated_at=now() where id=${id}`;
-      await tx`
-        insert into survey_participants (survey_id, user_id, property_id, personal_account_id, organization_id, status, verified_source, verified_at, eligibility_metadata)
-        select distinct ${id}::uuid, prior.user_id, prior.property_id, prior.personal_account_id, prior.organization_id, 'eligible'::participant_status, 'local_targeting'::text, now(), ${tx.json({ materializedAtPublish: true })}
-        from survey_participants prior join properties p on p.id=prior.property_id
-        where prior.status='eligible' and exists (
-          select 1 from survey_targets st where st.survey_id=${id} and (
-            (st.target_type='personal_account' and st.personal_account_id=prior.personal_account_id) or
-            (st.target_type='property' and st.property_id=prior.property_id) or
-            (st.target_type='organization' and st.organization_id=prior.organization_id) or
-            (st.target_type='building' and st.city=p.city and st.street=p.street and st.building=p.building)
-          )
-        ) on conflict (survey_id,user_id,property_id) do nothing
-      `;
+      await tx.unsafe(materializeSurveyParticipantsSql, [id]);
       await this.auditTx(tx, "SURVEY_PUBLISHED", actorId, "survey", id, requestId, { version: details.version, sha256: frozen.sha256, status: nextStatus });
     });
     return (await this.getSurvey(id))!;
@@ -330,12 +319,7 @@ export class PostgresAdminRepository implements AdminRepository {
     return items.map(r=>({participant:r.participantReference,property:r.property,account:r.account,eligibility:r.eligibility,voteState:r.voteState,startedAt:r.startedAt,submittedAt:r.submittedAt,documentId:r.documentId}));
   }
 
-  async availableSurveys(userId:string){return this.sql<Record<string,unknown>[]>`
-    select s.id, s.protocol_number as protocol, s.title_ru as title, s.description_ru as subtitle, s.starts_at as "startsAt", s.closes_at as "closesAt", s.status,
-      json_agg(json_build_object('id',q.id,'position',q.position,'text',q.text_ru,'textKk',q.text_kk) order by q.position) as questions
-    from surveys s join survey_participants sp on sp.survey_id=s.id and sp.user_id=${userId} and sp.status='eligible' join survey_questions q on q.survey_id=s.id and q.status='active'
-    where s.status in ('active','scheduled') group by s.id order by s.starts_at,s.created_at`;
-  }
+  async availableSurveys(userId:string){return this.sql.unsafe<Record<string,unknown>[]>(availableSurveysSql,[userId]);}
 
   private async lockDraft(tx:Tx,id:string){const rows=await tx<{status:SurveyStatus}[]>`select status from surveys where id=${id} for update`;if(!rows[0])throw new ApplicationError("not_found","Survey was not found");if(rows[0].status!=="draft")throw new ApplicationError("invalid_survey","Published survey content is immutable");}
   private async throwDraftOrConflict(tx:Tx,id:string,expected:number):Promise<never>{const rows=await tx<{status:SurveyStatus;lockVersion:number}[]>`select status,lock_version as "lockVersion" from surveys where id=${id}`;if(!rows[0])throw new ApplicationError("not_found","Survey was not found");if(rows[0].status!=="draft")throw new ApplicationError("invalid_survey","Published survey content is immutable");throw new ApplicationError("concurrency_conflict",`Survey changed from lock version ${expected} to ${rows[0].lockVersion}`);}

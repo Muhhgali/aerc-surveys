@@ -88,6 +88,77 @@ test("admin publishes a targeted survey, observes a final vote and closes it", a
   const auditBody=await audit.json() as {items:{subjectId:string}[]};expect(auditBody.items.some(item=>item.subjectId===surveyId)).toBe(true);
 });
 
+test("account targeting reaches an owner who has never participated in any survey", async ({ page }) => {
+  await clearParticipation();
+  await loginAdmin(page);
+  await page.goto("/admin/surveys/new");
+  const protocol = `E2E-ACCOUNT-${Date.now()}`;
+  await page.getByLabel("Номер протокола").fill(protocol);
+  await page.getByLabel("Название · RU").fill("Опрос по лицевому счёту");
+  await page.getByLabel("Название · KZ").fill("Жеке шот бойынша сауалнама");
+  await page.getByLabel("Описание · RU").fill("Адресная рассылка по лицевому счёту 1911");
+  await page.getByLabel("Описание · KZ").fill("1911 жеке шоты бойынша мекенжайлық тарату");
+  await page.getByLabel("Начало").fill(localInput(new Date(Date.now() - 60_000)));
+  await page.getByLabel("Завершение").fill(localInput(new Date(Date.now() + 2 * 86_400_000)));
+  await page.getByRole("button", { name: "Сохранить черновик" }).click();
+  await expect(page).toHaveURL(/\/admin\/surveys\/[0-9a-f-]+\/edit$/);
+  const surveyId = page.url().split("/").at(-2)!;
+
+  await page.getByPlaceholder("Текст вопроса RU").fill("Утвердить смету на 2026 год");
+  await page.getByPlaceholder("Сұрақ мәтіні KZ").fill("2026 жылға смета бекітілсін");
+  await page.getByRole("button", { name: "Добавить" }).click();
+  await expect(page.getByText("Вопросы · 1")).toBeVisible();
+
+  await page.locator(".admin-target-grid textarea").fill("1911");
+  await page.getByRole("button", { name: "Проверить CSV" }).click();
+  await expect(page.getByText("Resolved: 1")).toBeVisible();
+  await page.getByRole("button", { name: "Подтвердить import" }).click();
+  await expect(page.getByText("1 targets")).toBeVisible();
+
+  await page.goto(`/admin/surveys/${surveyId}`);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Опубликовать" }).click();
+  await expect(page.getByText("Активен", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 eligible")).toBeVisible();
+
+  await page.request.delete("/api/session", { headers: { origin } });
+  await loginVoter(page);
+  const card = page.locator(".survey-card", { hasText: "Опрос по лицевому счёту" });
+  await expect(card).toBeVisible();
+  await expect(page.locator(".survey-card", { hasText: "ПРОТОКОЛ №12" })).toHaveCount(0);
+  await card.getByRole("button", { name: "Пройти" }).click();
+  await page.getByRole("button", { name: /^Начать/ }).click();
+  await page.getByLabel("Лицевой счёт").fill("1911");
+  await page.getByRole("button", { name: /Найти объект/ }).click();
+  await page.getByRole("button", { name: /Перейти к голосованию/ }).click();
+  await page.getByRole("button", { name: /^За/ }).click();
+  await expect(page.getByTestId("save-status")).toContainText("Сохранено");
+  await page.getByRole("button", { name: /Проверить/ }).click();
+  await page.getByRole("button", { name: /Перейти к подтверждению/ }).click();
+  // A toast expiring mid-stroke remounts the screen and clears the canvas.
+  await expect(page.locator(".toast")).toHaveCount(0);
+  await page.getByRole("button", { name: /Добавить визуальную подпись/ }).click();
+  const canvas = page.getByLabel("Поле для рукописной подписи"); const box = await canvas.boundingBox(); if (!box) throw new Error("Signature canvas missing");
+  await canvas.dispatchEvent("pointerdown", { pointerId: 1, clientX: box.x + 20, clientY: box.y + 30, buttons: 1 });
+  await canvas.dispatchEvent("pointermove", { pointerId: 1, clientX: box.x + 110, clientY: box.y + 55, buttons: 1 });
+  await canvas.dispatchEvent("pointerup", { pointerId: 1, clientX: box.x + 110, clientY: box.y + 55 });
+  await page.getByRole("button", { name: "Готово" }).click();
+  await page.getByRole("button", { name: /Подтвердить и отправить/ }).click();
+  await page.getByRole("dialog").getByRole("button", { name: /Отправить голосование/ }).click();
+  await expect(page.getByRole("heading", { name: "Голос принят" })).toBeVisible();
+  const documentId = (await page.locator(".document-id").textContent())!.trim();
+
+  await page.request.delete("/api/session", { headers: { origin } });
+  await loginAdmin(page);
+  await page.goto(`/admin/surveys/${surveyId}/results`);
+  await expect(page.locator(".admin-table tbody tr")).toHaveCount(1);
+  await page.goto(`/admin/surveys/${surveyId}/participants`);
+  await expect(page.getByText("••••1911")).toBeVisible();
+  await page.goto(`/admin/documents/${documentId}`);
+  await expect(page.getByText("valid", { exact: true })).toBeVisible();
+  expect((await page.request.get(`/api/documents/${documentId}/pdf`)).status()).toBe(200);
+});
+
 test("admin mutations enforce optimistic concurrency and audited role assignment", async ({ page }) => {
   await loginAdmin(page);
   const created=await page.request.post("/api/admin/surveys",{headers:{origin},data:validDraft()});
@@ -126,6 +197,7 @@ test("platform RBAC blocks privilege escalation and omits full participant accou
   expect((await page.request.delete("/api/admin/audit/anything",{headers:{origin}})).status()).toBe(404);
 });
 
+async function clearParticipation(){const sql=e2eDatabase();try{await sql`delete from survey_participants`;}finally{await sql.end();}}
 async function assignOnly(role:string){const sql=e2eDatabase();try{await sql.begin(async tx=>{await tx`delete from user_platform_roles where user_id=${voterId}`;await tx`insert into user_platform_roles(user_id,role_id) select ${voterId},id from platform_roles where role_key=${role}`;await tx`insert into platform_access_controls(user_id) values(${voterId}) on conflict(user_id) do update set disabled_at=null`;});}finally{await sql.end();}}
 function localInput(date:Date){const shifted=new Date(date.getTime()-date.getTimezoneOffset()*60_000);return shifted.toISOString().slice(0,16)}
 function validDraft(){return{protocolNumber:"DENIED",titleRu:"Denied",titleKk:"Тыйым",descriptionRu:"Denied",descriptionKk:"Тыйым",startsAt:new Date().toISOString(),closesAt:new Date(Date.now()+86_400_000).toISOString()}}

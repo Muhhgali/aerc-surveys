@@ -36,6 +36,13 @@
       "when": 1786945929376,
       "tag": "0004_shiny_grandmaster",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787053995497,
+      "tag": "0005_strange_blob",
+      "breakpoints": true
     }
   ]
 }

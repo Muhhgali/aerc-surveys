@@ -7,7 +7,7 @@ let database: PGlite;
 
 beforeAll(async () => {
   database = new PGlite();
-  for (const file of ["0000_production_data_model.sql", "0001_regular_madelyne_pryor.sql", "0002_superb_zodiak.sql", "0003_vote_document_immutability.sql", "0004_shiny_grandmaster.sql"]) {
+  for (const file of ["0000_production_data_model.sql", "0001_regular_madelyne_pryor.sql", "0002_superb_zodiak.sql", "0003_vote_document_immutability.sql", "0004_shiny_grandmaster.sql", "0005_strange_blob.sql"]) {
     const migration = await readFile(resolve(process.cwd(), `drizzle/${file}`), "utf8");
     await database.exec(migration.replaceAll("--> statement-breakpoint", ""));
   }
@@ -29,6 +29,7 @@ describe("PostgreSQL migration", () => {
       "surveys", "survey_questions", "survey_targets", "survey_participants", "vote_sessions", "votes", "vote_answers",
       "vote_autosaves", "binary_assets", "visual_signatures", "signature_requests", "documents", "document_versions", "audit_logs", "integration_requests",
       "platform_roles", "platform_permissions", "role_permissions", "user_platform_roles", "platform_access_controls", "survey_versions",
+      "property_holdings",
     ]) expect(tables.has(table), `${table} is missing`).toBe(true);
   });
 
@@ -137,6 +138,29 @@ describe("Stage 3 to Stage 4 upgrade migration", () => {
       await upgraded.exec((await readFile(resolve(process.cwd(), "drizzle/0004_shiny_grandmaster.sql"), "utf8")).replaceAll("--> statement-breakpoint", ""));
       const result = await upgraded.query<{ sessions: number; participants: number; audit: number; roles: number }>(`select (select count(*)::int from auth_sessions) sessions,(select count(*)::int from survey_participants) participants,(select count(*)::int from audit_logs) audit,(select count(*)::int from platform_roles) roles`);
       expect(result.rows[0]).toEqual({ sessions: 1, participants: 1, audit: 1, roles: 6 });
+    } finally { await upgraded.close(); }
+  });
+});
+
+describe("Stage 4 property holding read model migration", () => {
+  it("backfills existing eligible participants into the targeting read model", async () => {
+    const upgraded = new PGlite();
+    try {
+      for (const file of ["0000_production_data_model.sql", "0001_regular_madelyne_pryor.sql", "0002_superb_zodiak.sql", "0003_vote_document_immutability.sql", "0004_shiny_grandmaster.sql"]) await upgraded.exec((await readFile(resolve(process.cwd(), `drizzle/${file}`), "utf8")).replaceAll("--> statement-breakpoint", ""));
+      await upgraded.exec(`
+        insert into users (id,display_name) values ('44000000-0000-4000-8000-000000000001','Existing owner');
+        insert into organizations (id,bin,legal_name,display_name,type) values ('44000000-0000-4000-8000-000000000002','S4','S4','S4','osi');
+        insert into properties (id,city,street,building,premise,property_type) values ('44000000-0000-4000-8000-000000000003','Astana','Street','1','1','apartment');
+        insert into personal_accounts (id,external_account_id,account_number,property_id) values ('44000000-0000-4000-8000-000000000004','legacy-1911','1911','44000000-0000-4000-8000-000000000003');
+        insert into surveys (id,organization_id,protocol_number,title_ru,status) values ('44000000-0000-4000-8000-000000000005','44000000-0000-4000-8000-000000000002','S4','Stage 4','active');
+        insert into survey_participants (id,survey_id,user_id,property_id,personal_account_id,status,verified_source,verified_at) values ('44000000-0000-4000-8000-000000000006','44000000-0000-4000-8000-000000000005','44000000-0000-4000-8000-000000000001','44000000-0000-4000-8000-000000000003','44000000-0000-4000-8000-000000000004','eligible','test',now());
+      `);
+      await upgraded.exec((await readFile(resolve(process.cwd(), "drizzle/0005_strange_blob.sql"), "utf8")).replaceAll("--> statement-breakpoint", ""));
+      const result = await upgraded.query<{ user_id: string; account_number: string; source: string; participants: number }>(`
+        select h.user_id, pa.account_number, h.source, (select count(*)::int from survey_participants) participants
+        from property_holdings h join personal_accounts pa on pa.id = h.personal_account_id
+      `);
+      expect(result.rows).toEqual([{ user_id: "44000000-0000-4000-8000-000000000001", account_number: "1911", source: "migrated_survey_participant", participants: 1 }]);
     } finally { await upgraded.close(); }
   });
 });

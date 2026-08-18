@@ -118,6 +118,30 @@ export const personalAccounts = pgTable("personal_accounts", {
   index("personal_accounts_property_idx").on(table.propertyId),
 ]);
 
+/**
+ * Trusted local read model of who holds a property or personal account.
+ * Populated by development/preview fixtures today and by `AercPropertyProvider`
+ * once the billing contract exists. Survey targeting resolves eligibility from here.
+ */
+export const propertyHoldings = pgTable("property_holdings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "restrict" }),
+  personalAccountId: uuid("personal_account_id").references(() => personalAccounts.id, { onDelete: "restrict" }),
+  organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "restrict" }),
+  source: text("source").notNull().default("mock"),
+  status: recordStatus("status").notNull().default("active"),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }).defaultNow().notNull(),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("property_holdings_identity_account_unique").on(table.userId, table.propertyId, table.personalAccountId)
+    .where(sql`${table.personalAccountId} is not null`),
+  uniqueIndex("property_holdings_identity_property_unique").on(table.userId, table.propertyId)
+    .where(sql`${table.personalAccountId} is null`),
+  index("property_holdings_property_idx").on(table.propertyId),
+  index("property_holdings_account_idx").on(table.personalAccountId),
+]);
+
 export const surveys = pgTable("surveys", {
   id: uuid("id").defaultRandom().primaryKey(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "restrict" }),
