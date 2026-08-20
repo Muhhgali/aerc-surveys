@@ -7,8 +7,10 @@ let database: PGlite;
 
 beforeAll(async () => {
   database = new PGlite();
-  for (const file of ["0000_production_data_model.sql", "0001_regular_madelyne_pryor.sql", "0002_superb_zodiak.sql", "0003_vote_document_immutability.sql", "0004_shiny_grandmaster.sql", "0005_strange_blob.sql"]) {
-    const migration = await readFile(resolve(process.cwd(), `drizzle/${file}`), "utf8");
+  // Replays exactly what `drizzle-kit migrate` would apply, so a new migration file is covered without editing this list.
+  const journal = JSON.parse(await readFile(resolve(process.cwd(), "drizzle/meta/_journal.json"), "utf8")) as { entries: { idx: number; tag: string }[] };
+  for (const entry of [...journal.entries].sort((left, right) => left.idx - right.idx)) {
+    const migration = await readFile(resolve(process.cwd(), `drizzle/${entry.tag}.sql`), "utf8");
     await database.exec(migration.replaceAll("--> statement-breakpoint", ""));
   }
 });
@@ -30,7 +32,49 @@ describe("PostgreSQL migration", () => {
       "vote_autosaves", "binary_assets", "visual_signatures", "signature_requests", "documents", "document_versions", "audit_logs", "integration_requests",
       "platform_roles", "platform_permissions", "role_permissions", "user_platform_roles", "platform_access_controls", "survey_versions",
       "property_holdings",
+      "invitations", "organization_access_grants", "survey_signatories", "survey_signature_policies",
+      "otp_challenges", "vote_contact_details", "survey_eligibility_snapshots", "survey_result_snapshots", "official_signatures",
+      "user_credentials",
     ]) expect(tables.has(table), `${table} is missing`).toBe(true);
+  });
+
+  it("stores console credentials with a unique login and cascading ownership", async () => {
+    await database.exec(`
+      insert into users (id, display_name) values ('30000000-0000-4000-8000-000000000001', 'Organization user');
+      insert into user_credentials (user_id, login, password_hash) values ('30000000-0000-4000-8000-000000000001', 'osi.manager', 'scrypt$digest');
+    `);
+    const stored = await database.query<{ mustChange: boolean; failed: number }>(
+      `select must_change_password as "mustChange", failed_attempts as "failed" from user_credentials where login = 'osi.manager'`,
+    );
+    expect(stored.rows[0]).toEqual({ mustChange: true, failed: 0 });
+    await expect(database.exec(`
+      insert into users (id, display_name) values ('30000000-0000-4000-8000-000000000002', 'Duplicate');
+      insert into user_credentials (user_id, login, password_hash) values ('30000000-0000-4000-8000-000000000002', 'osi.manager', 'scrypt$digest');
+    `)).rejects.toMatchObject({ code: "23505" });
+    await database.exec(`delete from users where id = '30000000-0000-4000-8000-000000000001'`);
+    const remaining = await database.query(`select 1 from user_credentials where login = 'osi.manager'`);
+    expect(remaining.rows).toHaveLength(0);
+  });
+
+  it("keeps organization contacts and the declared voter name", async () => {
+    const columns = await database.query<{ column_name: string }>(`
+      select column_name from information_schema.columns
+      where table_schema='public' and ((table_name='organizations' and column_name like 'contact%') or (table_name='vote_contact_details' and column_name='full_name'))
+    `);
+    expect(columns.rows.map((row) => row.column_name).sort()).toEqual(["contact_email", "contact_name", "contact_phone", "full_name"].sort());
+  });
+
+  it("stores named survey signatories separately from the account that draws the visual signature", async () => {
+    const columns = await database.query<{ column_name: string }>(`
+      select column_name from information_schema.columns
+      where table_schema='public' and table_name='survey_signatories' and column_name='display_name'
+    `);
+    expect(columns.rows).toHaveLength(1);
+    const official = await database.query<{ column_name: string }>(`
+      select column_name from information_schema.columns
+      where table_schema='public' and table_name='official_signatures' and column_name='signatory_id'
+    `);
+    expect(official.rows).toHaveLength(1);
   });
 
   it("enforces one submitted vote per user, property and survey", async () => {

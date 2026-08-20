@@ -29,6 +29,9 @@ export interface VoteLifecycleRepository {
   getVisualSignature(voteId: string): Promise<VisualSignatureRecord | null>;
   findFinalDocument(voteId: string): Promise<FinalDocumentRecord | null>;
   getOwnedDocumentAsset(publicId: string, userId: string): Promise<{ storageKey: string; sha256: string } | null>;
+  allocateSheetNumber(voteId: string, userId: string): Promise<number>;
+  getVoteContacts(voteId: string): Promise<{ phone: string | null; email: string | null; fullName: string | null } | null>;
   completeDocument(input: { publicId: string; voteId: string; userId: string; authSessionId: string; submitIdempotencyKey: string; surveyId: string; surveyVersion: number; storageKey: string; sha256: string; canonicalSha256: string; signingProvider: string; verificationReference: string; sizeBytes: number; signatureRequestId: string; requestId: string }): Promise<FinalDocumentRecord>;
   getPublicVerification(publicId: string): Promise<PublicDocumentVerification | null>;
+  listSurveySignatories(surveyId: string): Promise<{ roleKey: string; displayName: string }[]>;
 }

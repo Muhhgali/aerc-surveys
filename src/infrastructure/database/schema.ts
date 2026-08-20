@@ -28,6 +28,10 @@ export const organizationType = pgEnum("organization_type", ["osi", "ksk", "mana
 export const organizationRole = pgEnum("organization_role", ["owner", "administrator", "representative", "auditor"]);
 export const propertyType = pgEnum("property_type", ["apartment", "non_residential", "house", "other"]);
 export const surveyStatus = pgEnum("survey_status", ["draft", "scheduled", "active", "closed", "archived"]);
+export const meetingForm = pgEnum("meeting_form", ["in_person", "absentee", "mixed", "electronic"]);
+export const documentLanguage = pgEnum("document_language", ["ru", "kk", "bilingual"]);
+export const invitationStatus = pgEnum("invitation_status", ["pending", "accepted", "expired", "revoked"]);
+export const otpChannel = pgEnum("otp_channel", ["whatsapp", "email", "invite", "mock"]);
 export const questionStatus = pgEnum("question_status", ["active", "inactive"]);
 export const surveyTargetType = pgEnum("survey_target_type", ["building", "property", "organization", "personal_account"]);
 export const participantStatus = pgEnum("participant_status", ["eligible", "ineligible", "revoked"]);
@@ -71,9 +75,29 @@ export const organizations = pgTable("organizations", {
   legalName: text("legal_name").notNull(),
   displayName: text("display_name").notNull(),
   type: organizationType("type").notNull(),
+  contactName: text("contact_name"),
+  contactPhone: text("contact_phone"),
+  contactEmail: text("contact_email"),
   status: recordStatus("status").notNull().default("active"),
   ...timestamps,
 });
+
+/**
+ * Local login + password for console users (AERC staff and organization accounts).
+ * Passwords are stored as scrypt digests; the plaintext never leaves the request handler.
+ */
+export const userCredentials = pgTable("user_credentials", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  login: text("login").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  mustChangePassword: boolean("must_change_password").notNull().default(true),
+  failedAttempts: integer("failed_attempts").notNull().default(0),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+  ...timestamps,
+}, (table) => [
+  check("user_credentials_failed_attempts_nonnegative", sql`${table.failedAttempts} >= 0`),
+]);
 
 export const organizationMembers = pgTable("organization_members", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -152,6 +176,8 @@ export const surveys = pgTable("surveys", {
   descriptionRu: text("description_ru").notNull().default(""),
   descriptionKk: text("description_kk").notNull().default(""),
   lockVersion: integer("lock_version").notNull().default(1),
+  meetingForm: meetingForm("meeting_form").notNull().default("electronic"),
+  documentLanguage: documentLanguage("document_language").notNull().default("ru"),
   status: surveyStatus("status").notNull().default("draft"),
   startsAt: timestamp("starts_at", { withTimezone: true }),
   closesAt: timestamp("closes_at", { withTimezone: true }),
@@ -170,6 +196,7 @@ export const surveyQuestions = pgTable("survey_questions", {
   textRu: text("text_ru").notNull(),
   textKk: text("text_kk"),
   required: boolean("required").notNull().default(true),
+  votingRule: jsonb("voting_rule").$type<Record<string, unknown>>().notNull().default({ type: "percentage_of_all_eligible", thresholdPercent: 51 }),
   status: questionStatus("status").notNull().default("active"),
   ...timestamps,
 }, (table) => [
@@ -269,11 +296,13 @@ export const votes = pgTable("votes", {
   readyAt: timestamp("ready_at", { withTimezone: true }),
   signedAt: timestamp("signed_at", { withTimezone: true }),
   submittedAt: timestamp("submitted_at", { withTimezone: true }),
+  sheetNumber: integer("sheet_number"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("votes_one_final_vote_unique").on(table.surveyId, table.userId, table.propertyId).where(sql`${table.status} = 'submitted'`),
   uniqueIndex("votes_one_workflow_unique").on(table.surveyId, table.userId, table.propertyId).where(sql`${table.status} <> 'voided'`),
+  uniqueIndex("votes_survey_sheet_unique").on(table.surveyId, table.sheetNumber).where(sql`${table.sheetNumber} is not null`),
   index("votes_participant_idx").on(table.participantId),
   index("votes_survey_status_idx").on(table.surveyId, table.status),
 ]);
@@ -344,6 +373,7 @@ export const documents = pgTable("documents", {
   index("documents_survey_idx").on(table.surveyId),
   index("documents_survey_created_idx").on(table.surveyId, table.createdAt),
   uniqueIndex("documents_vote_unique").on(table.voteId).where(sql`${table.voteId} is not null`),
+  uniqueIndex("documents_survey_protocol_unique").on(table.surveyId).where(sql`${table.type} = 'protocol'`),
 ]);
 
 export const documentVersions = pgTable("document_versions", {
@@ -440,4 +470,114 @@ export const integrationRequests = pgTable("integration_requests", {
 }, (table) => [
   index("integration_requests_provider_operation_idx").on(table.provider, table.operation),
   check("integration_requests_attempts_positive", sql`${table.attempts} > 0`),
+]);
+
+export const invitations = pgTable("invitations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  email: text("email").notNull(),
+  displayName: text("display_name").notNull(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "restrict" }),
+  organizationRole: text("organization_role").notNull(),
+  permissions: jsonb("permissions").$type<string[]>().notNull().default([]),
+  tokenHash: text("token_hash").notNull().unique(),
+  status: invitationStatus("status").notNull().default("pending"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  invitedByUserId: uuid("invited_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  acceptedUserId: uuid("accepted_user_id").references(() => users.id, { onDelete: "set null" }),
+  ...timestamps,
+}, (table) => [
+  index("invitations_org_idx").on(table.organizationId, table.status),
+  index("invitations_email_idx").on(table.email),
+]);
+
+export const organizationAccessGrants = pgTable("organization_access_grants", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  roleKey: text("role_key").notNull(),
+  permissions: jsonb("permissions").$type<string[]>().notNull().default([]),
+  assignedByUserId: uuid("assigned_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.organizationId, table.roleKey] }),
+  index("organization_access_grants_org_idx").on(table.organizationId),
+]);
+
+export const surveySignatories = pgTable("survey_signatories", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  surveyId: uuid("survey_id").notNull().references(() => surveys.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  roleKey: text("role_key").notNull(),
+  displayName: text("display_name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("survey_signatories_survey_idx").on(table.surveyId),
+]);
+
+export const surveySignaturePolicies = pgTable("survey_signature_policies", {
+  surveyId: uuid("survey_id").notNull().references(() => surveys.id, { onDelete: "cascade" }),
+  roleKey: text("role_key").notNull(),
+  minRequired: integer("min_required").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.surveyId, table.roleKey] }),
+  check("survey_signature_policies_min_nonnegative", sql`${table.minRequired} >= 0`),
+]);
+
+export const otpChallenges = pgTable("otp_challenges", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  channel: otpChannel("channel").notNull(),
+  recipientHash: text("recipient_hash").notNull(),
+  codeHash: text("code_hash").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(5),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  lastSentAt: timestamp("last_sent_at", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("otp_challenges_recipient_idx").on(table.recipientHash, table.createdAt),
+  check("otp_challenges_attempts_nonnegative", sql`${table.attemptCount} >= 0`),
+]);
+
+export const voteContactDetails = pgTable("vote_contact_details", {
+  voteId: uuid("vote_id").primaryKey().references(() => votes.id, { onDelete: "cascade" }),
+  phone: text("phone"),
+  email: text("email"),
+  fullName: text("full_name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  check("vote_contact_details_has_value", sql`${table.phone} is not null or ${table.email} is not null`),
+]);
+
+export const surveyEligibilitySnapshots = pgTable("survey_eligibility_snapshots", {
+  surveyId: uuid("survey_id").primaryKey().references(() => surveys.id, { onDelete: "restrict" }),
+  eligibleTotal: integer("eligible_total").notNull(),
+  apartmentOwners: integer("apartment_owners").notNull().default(0),
+  nonResidentialOwners: integer("non_residential_owners").notNull().default(0),
+  snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull(),
+  sha256: text("sha256").notNull(),
+  capturedAt: timestamp("captured_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const surveyResultSnapshots = pgTable("survey_result_snapshots", {
+  surveyId: uuid("survey_id").primaryKey().references(() => surveys.id, { onDelete: "restrict" }),
+  snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull(),
+  sha256: text("sha256").notNull(),
+  capturedAt: timestamp("captured_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const officialSignatures = pgTable("official_signatures", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  surveyId: uuid("survey_id").notNull().references(() => surveys.id, { onDelete: "restrict" }),
+  signatoryId: uuid("signatory_id").notNull().references(() => surveySignatories.id, { onDelete: "restrict" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  roleKey: text("role_key").notNull(),
+  visualStorageKey: text("visual_storage_key").notNull().references(() => binaryAssets.storageKey, { onDelete: "restrict" }),
+  resultSha256: text("result_sha256").notNull(),
+  signedAt: timestamp("signed_at", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("official_signatures_signatory_unique").on(table.signatoryId),
+  index("official_signatures_survey_idx").on(table.surveyId),
 ]);

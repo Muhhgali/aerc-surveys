@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { ApplicationError } from "@/src/application/errors";
 import { deterministicSerialize, type JsonValue } from "@/src/domain/canonical-vote";
+import type { MeetingForm, DocumentLanguage } from "@/src/domain/meeting-form";
+import type { SignaturePolicyRequirement } from "@/src/domain/signature-policy";
+import type { VotingRule } from "@/src/domain/voting-rules";
+import { defaultVotingRule, parseVotingRule } from "@/src/domain/voting-rules";
 
 export const surveyStatuses = ["draft", "scheduled", "active", "closed", "archived"] as const;
 export type SurveyStatus = (typeof surveyStatuses)[number];
@@ -27,8 +31,12 @@ export interface PublishableSurvey {
   descriptionKk: string;
   startsAt: Date | null;
   closesAt: Date | null;
-  questions: readonly { id: string; position: number; textRu: string; textKk: string | null; required: boolean }[];
+  meetingForm: MeetingForm;
+  documentLanguage: DocumentLanguage;
+  questions: readonly { id: string; position: number; textRu: string; textKk: string | null; required: boolean; votingRule: VotingRule }[];
   targets: readonly Record<string, unknown>[];
+  signatories: readonly { userId: string; roleKey: string; displayName: string; email: string | null }[];
+  signaturePolicy: readonly SignaturePolicyRequirement[];
 }
 
 export function validateForPublish(survey: PublishableSurvey): void {
@@ -37,10 +45,12 @@ export function validateForPublish(survey: PublishableSurvey): void {
   if (!survey.titleRu.trim() || !survey.titleKk?.trim()) errors.push("bilingual_title");
   if (!survey.descriptionRu.trim() || !survey.descriptionKk.trim()) errors.push("bilingual_description");
   if (!survey.startsAt || !survey.closesAt || survey.closesAt <= survey.startsAt) errors.push("period");
+  if (!survey.meetingForm) errors.push("meeting_form");
   if (survey.questions.length === 0) errors.push("questions");
   if (survey.questions.some((question) => !question.textRu.trim() || !question.textKk?.trim())) errors.push("bilingual_questions");
   if (new Set(survey.questions.map((question) => question.position)).size !== survey.questions.length) errors.push("question_order");
   if (survey.targets.length === 0) errors.push("targeting");
+  if (survey.signaturePolicy.some((requirement) => requirement.minRequired > requirement.assignedCount)) errors.push("signature_policy");
   if (errors.length) throw new ApplicationError("invalid_request", `Survey is not publishable: ${errors.join(", ")}`);
 }
 
@@ -54,10 +64,17 @@ export function createSurveySnapshot(survey: PublishableSurvey): { snapshot: Rec
     description: { ru: survey.descriptionRu, kk: survey.descriptionKk },
     startsAt: survey.startsAt?.toISOString() ?? null,
     closesAt: survey.closesAt?.toISOString() ?? null,
-    questions: [...survey.questions].sort((a, b) => a.position - b.position).map((question) => ({ id: question.id, position: question.position, text: { ru: question.textRu, kk: question.textKk }, required: question.required })),
+    meetingForm: survey.meetingForm,
+    documentLanguage: survey.documentLanguage,
+    questions: [...survey.questions].sort((a, b) => a.position - b.position).map((question) => ({
+      id: question.id, position: question.position, text: { ru: question.textRu, kk: question.textKk }, required: question.required,
+      votingRule: parseVotingRule(question.votingRule ?? defaultVotingRule),
+    })),
     targets: survey.targets,
+    signatories: survey.signatories,
+    signaturePolicy: survey.signaturePolicy,
   };
-  const serialized = deterministicSerialize(snapshot as JsonValue);
+  const serialized = deterministicSerialize(snapshot as unknown as JsonValue);
   return { snapshot, sha256: createHash("sha256").update(serialized).digest("hex") };
 }
 

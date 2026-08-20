@@ -22,6 +22,7 @@ import type { VoteState } from "@/src/domain/vote-lifecycle";
 import type { IdentityMethod, VerifiedIdentity } from "@/src/domain/identity";
 import type { VoteChoice } from "@/src/domain/voting";
 import type { DatabaseClient } from "@/src/infrastructure/database/client";
+import { ensureSurveyWindow } from "@/src/infrastructure/database/survey-window";
 
 export class PostgresAuthenticationRepository implements AuthenticationRepository {
   constructor(private readonly sql: DatabaseClient) {}
@@ -89,6 +90,7 @@ export class PostgresVotingRepository implements VotingRepository, VoteLifecycle
   constructor(private readonly sql: DatabaseClient) {}
 
   async getSurvey(surveyId: string): Promise<SurveyVotingState | null> {
+    await ensureSurveyWindow(this.sql, surveyId, null, "survey-window");
     const surveys = await this.sql<{ id: string; status: SurveyVotingState["status"]; starts_at: Date | null; closes_at: Date | null }[]>`
       select id, status, starts_at, closes_at from surveys where id = ${surveyId} limit 1
     `;
@@ -358,6 +360,33 @@ export class PostgresVotingRepository implements VotingRepository, VoteLifecycle
       where d.public_id=${publicId} and v.user_id=${userId} and d.status='generated' limit 1
     `;
     return rows[0] ?? null;
+  }
+
+  async allocateSheetNumber(voteId: string, userId: string): Promise<number> {
+    return this.sql.begin(async (transaction) => {
+      const votes = await transaction<{ surveyId: string; sheetNumber: number | null }[]>`
+        select survey_id as "surveyId", sheet_number as "sheetNumber" from votes where id=${voteId} and user_id=${userId} for update
+      `;
+      if (!votes[0]) throw new ApplicationError("not_found", "Vote not found");
+      if (votes[0].sheetNumber) return votes[0].sheetNumber;
+      await transaction`select pg_advisory_xact_lock(hashtext(${votes[0].surveyId}))`;
+      const next = await transaction<{ n: number }[]>`select coalesce(max(sheet_number), 0) + 1 as n from votes where survey_id=${votes[0].surveyId}`;
+      await transaction`update votes set sheet_number=${next[0].n} where id=${voteId}`;
+      return next[0].n;
+    });
+  }
+
+  async getVoteContacts(voteId: string): Promise<{ phone: string | null; email: string | null; fullName: string | null } | null> {
+    const rows = await this.sql<{ phone: string | null; email: string | null; fullName: string | null }[]>`
+      select phone, email, full_name as "fullName" from vote_contact_details where vote_id=${voteId} limit 1
+    `;
+    return rows[0] ?? null;
+  }
+
+  async listSurveySignatories(surveyId: string): Promise<{ roleKey: string; displayName: string }[]> {
+    return this.sql<{ roleKey: string; displayName: string }[]>`
+      select role_key as "roleKey", display_name as "displayName" from survey_signatories where survey_id=${surveyId} order by created_at
+    `;
   }
 
   async completeDocument(input: { publicId: string; voteId: string; userId: string; authSessionId: string; submitIdempotencyKey: string; surveyId: string; surveyVersion: number; storageKey: string; sha256: string; canonicalSha256: string; signingProvider: string; verificationReference: string; sizeBytes: number; signatureRequestId: string; requestId: string }): Promise<FinalDocumentRecord> {

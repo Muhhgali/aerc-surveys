@@ -3,6 +3,7 @@ import SurveyApp from "../survey-app";
 const routes = [
   ["login"],
   ["auth", "verify"],
+  ["property"],
   ["dashboard"],
   ["archive"],
   ["archive", "8"],

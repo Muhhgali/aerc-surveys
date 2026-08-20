@@ -15,7 +15,7 @@ export type Survey = {
   deadline: string;
   deadlineShort: string;
   duration: string;
-  status: "active" | "soon";
+  status: "active" | "soon" | "complete";
   questions: SurveyQuestion[];
 };
 
@@ -30,11 +30,11 @@ export type ArchivedSheet = {
   account: string;
   apartment: string;
   questions: SurveyQuestion[];
-  answers: Answer[];
+  answers: (Answer | null)[];
 };
 
 // The owner survey catalogue is served by /api/surveys from PostgreSQL.
-// Only the signed archive below remains demo content until archive persistence is implemented.
+// Demo archive sheets remain as historical examples; submitted votes are listed from /api/documents.
 export const archivedSheets: ArchivedSheet[] = [
   {
     id: "8",

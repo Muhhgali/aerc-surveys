@@ -1,11 +1,16 @@
 import { config } from "dotenv";
+import { normalizeDatabaseUrl, type DatabaseTarget } from "../src/infrastructure/database/database-url";
 
 config({ path: [".env.local", ".env"] });
 
 export function requireDatabaseUrl(): string {
+  return requireDatabaseTarget().url;
+}
+
+export function requireDatabaseTarget(): DatabaseTarget {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is required");
-  return url;
+  return normalizeDatabaseUrl(url);
 }
 
 const previewEnvironments = new Set(["development", "test", "staging"]);
@@ -15,6 +20,7 @@ export interface PreviewSeedTarget {
   host: string;
   database: string;
   environment: string;
+  remote: boolean;
 }
 
 /**
@@ -22,16 +28,14 @@ export interface PreviewSeedTarget {
  * environment must be named explicitly, so this can never become a production seed bypass.
  */
 export function assertPreviewSeedMutation(): PreviewSeedTarget {
-  const url = requireDatabaseUrl();
+  const target = requireDatabaseTarget();
   const environment = process.env.APP_ENV;
   if (!environment) throw new Error("preview seed requires an explicit APP_ENV");
   if (environment === "production") throw new Error("preview seed is never allowed when APP_ENV=production");
   if (!previewEnvironments.has(environment)) throw new Error(`preview seed refuses the unknown environment: ${environment}`);
   if (process.env.ALLOW_PREVIEW_SEED !== "true") throw new Error("preview seed requires ALLOW_PREVIEW_SEED=true");
-  const parsed = new URL(url);
-  const database = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
-  if (!database) throw new Error("DATABASE_URL must name the target database");
-  return { url, host: parsed.host, database, environment };
+  if (!target.database) throw new Error("DATABASE_URL must name the target database");
+  return { url: target.url, host: `${target.host}:${target.port}`, database: target.database, environment, remote: target.remote };
 }
 
 export function assertDevelopmentDatabaseMutation(action: "seed" | "reset"): string {

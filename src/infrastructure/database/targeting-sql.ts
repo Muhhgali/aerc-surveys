@@ -57,6 +57,7 @@ on conflict (survey_id, user_id, property_id) do nothing
 export const availableSurveysSql = `
 select s.id, s.protocol_number as protocol, s.title_ru as title, s.description_ru as subtitle,
   s.starts_at as "startsAt", s.closes_at as "closesAt", s.status,
+  bool_or(v.status = 'submitted') as submitted,
   json_agg(
     json_build_object('id', q.id, 'position', q.position, 'text', q.text_ru, 'textKk', q.text_kk)
     order by q.position
@@ -65,7 +66,49 @@ from surveys s
 join survey_participants sp
   on sp.survey_id = s.id and sp.user_id = $1::uuid and sp.status = 'eligible'
 join survey_questions q on q.survey_id = s.id and q.status = 'active'
+left join votes v
+  on v.survey_id = s.id and v.user_id = $1::uuid and v.status = 'submitted'
 where s.status in ('active', 'scheduled')
+  or (s.status = 'closed' and v.id is not null)
 group by s.id
 order by s.starts_at, s.created_at
+`;
+
+/** $1 = user id. Submitted voting sheets owned by this identity. */
+export const ownerDocumentsSql = `
+select
+  d.public_id as id,
+  d.public_id as "documentId",
+  s.protocol_number as protocol,
+  s.title_ru as title,
+  v.submitted_at as "submittedAt",
+  coalesce(pa.account_number, '') as account,
+  concat('г. ', p.city, ', ул. ', p.street, ', д. ', p.building) as address,
+  coalesce(p.premise, '') as apartment,
+  (
+    select coalesce(
+      json_agg(json_build_object('id', q.id, 'position', q.position, 'text', q.text_ru) order by q.position),
+      '[]'::json
+    )
+    from survey_questions q
+    where q.survey_id = s.id and q.status = 'active'
+  ) as questions,
+  (
+    select coalesce(
+      json_agg(json_build_object('questionId', va.question_id, 'choice', va.choice)),
+      '[]'::json
+    )
+    from vote_answers va
+    where va.vote_id = v.id
+  ) as answers
+from documents d
+join votes v on v.id = d.vote_id
+join surveys s on s.id = d.survey_id
+join properties p on p.id = v.property_id
+left join survey_participants sp on sp.id = v.participant_id
+left join personal_accounts pa on pa.id = sp.personal_account_id
+where v.user_id = $1::uuid
+  and v.status = 'submitted'
+  and d.status = 'generated'
+order by v.submitted_at desc nulls last, d.created_at desc
 `;

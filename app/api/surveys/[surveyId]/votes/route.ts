@@ -6,7 +6,7 @@ import { requireCurrentSession } from "@/src/infrastructure/session/current-sess
 export const runtime = "nodejs";
 
 const startSchema = z.object({
-  accountReference: z.string().trim().regex(/^\d{1,32}$/),
+  accountReference: z.string().trim().regex(/^\d{4,32}$/),
   idempotencyKey: z.uuid(),
 }).strict();
 

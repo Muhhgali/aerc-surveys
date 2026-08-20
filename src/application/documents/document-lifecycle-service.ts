@@ -31,13 +31,18 @@ export class DocumentLifecycleService {
     const visualAsset = visual ? await this.storage.get({ storageKey: visual.storageKey }, context) : null;
     const publicId = uuidFromHash(createHash("sha256").update(`${input.voteId}:${prepared.sha256}:1`).digest("hex"));
     const verificationUrl = `${input.verificationBaseUrl.replace(/\/$/, "")}/verify/${publicId}`;
+    const sheetNumber = await this.votes.allocateSheetNumber(input.voteId, input.userId);
+    const contacts = await this.votes.getVoteContacts(input.voteId);
+    const signatories = await this.votes.listSurveySignatories(prepared.source.vote.surveyId);
     const pdfBytes = await this.pdf.renderVotingSheet({
       protocolNumber: prepared.source.protocolNumber, address: prepared.source.address, accountReference: prepared.source.accountReference,
-      unit: prepared.source.unit, participantDisplayName: prepared.source.participantDisplayName, createdAt: prepared.canonical.frozenAt,
+      unit: prepared.source.unit, participantDisplayName: contacts?.fullName?.trim() || prepared.source.participantDisplayName, createdAt: prepared.canonical.frozenAt,
       documentId: publicId, documentVersion: 1, surveyVersion: prepared.source.surveyVersion, signingProvider: this.signing.name,
       signingStatus: "verified", documentHashReference: prepared.sha256, verificationUrl,
       questions: prepared.canonical.survey.questions.map((question) => ({ position: question.position, text: question.textRu, answer: question.answer })),
       visualSignature: visualAsset?.ok ? visualAsset.value.bytes : undefined,
+      sheetNumber, phone: contacts?.phone, email: contacts?.email, submittedAt: new Date().toISOString(), electronicVoting: true,
+      signatories,
     });
     const pdfSha256 = createHash("sha256").update(pdfBytes).digest("hex");
     const storageKey = `documents/${publicId}/v1.pdf`;

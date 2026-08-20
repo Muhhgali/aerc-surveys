@@ -8,7 +8,11 @@ import { VoteService } from "@/src/application/voting/vote-service";
 import { VoteLifecycleService } from "@/src/application/voting/vote-lifecycle-service";
 import { VisualSignatureService } from "@/src/application/voting/visual-signature-service";
 import { DocumentLifecycleService } from "@/src/application/documents/document-lifecycle-service";
+import { EmailOtpProvider, MockOtpProvider, ResidentAuthService, WhatsAppOtpProvider } from "@/src/application/resident-auth/resident-auth-service";
 import { AdminService } from "@/src/application/admin/admin-service";
+import { CredentialAuthService } from "@/src/application/auth/credential-auth-service";
+import { hashPassword, verifyPassword } from "@/src/infrastructure/auth/password-hasher";
+import { PostgresCredentialRepository } from "@/src/infrastructure/database/postgres-credential-repository";
 import { loadProviderConfig } from "@/src/infrastructure/config/provider-config";
 import { getDatabaseClient } from "@/src/infrastructure/database/client";
 import {
@@ -46,6 +50,14 @@ export function createApplication() {
   const visualSignatures = new VisualSignatureService(votingRepository, votingRepository, providers.documentStorage);
   const documents = new DocumentLifecycleService(lifecycle, votingRepository, providers.signing, providers.documentStorage, new PdfKitVotingSheetRenderer());
   const organizations = new OrganizationService(membershipRepository);
-  const admin = new AdminService(adminRepository);
-  return { config, providers, database, sessions, authentication, properties, voting, lifecycle, visualSignatures, documents, organizations, audit, admin, adminRepository };
+  const passwordHasher = { hash: hashPassword, verify: verifyPassword };
+  const admin = new AdminService(adminRepository, passwordHasher);
+  const credentials = new CredentialAuthService(new PostgresCredentialRepository(database), sessions, passwordHasher);
+  const residentAuth = new ResidentAuthService(database, sessions, {
+    mock: new MockOtpProvider(),
+    email: new EmailOtpProvider(providers.notification),
+    whatsapp: new WhatsAppOtpProvider(config.enableMockAuth, providers.notification),
+    invite: new MockOtpProvider(),
+  }, config.enableMockAuth && config.environment !== "production");
+  return { config, providers, database, sessions, authentication, properties, voting, lifecycle, visualSignatures, documents, organizations, audit, admin, adminRepository, residentAuth, credentials };
 }

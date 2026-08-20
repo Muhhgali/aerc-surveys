@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { DEMO_OWNER_FULL_NAME } from "@/src/domain/demo-fixtures";
 import type {
   DocumentStorageProvider,
   IdentityProvider,
@@ -42,7 +43,7 @@ export class MockIdentityProvider implements IdentityProvider {
   completeAuthentication(input: { challengeId: string; response: string }, context: RequestContext) {
     return run(this.runtime, context, "identity.complete", false, () => ({
       subjectId: input.response === "approved-admin" ? "mock-admin" : "mock-subject-1911",
-      displayName: "Демо пользователь",
+      displayName: input.response === "approved-admin" ? "Представитель ОСИ-КСК" : DEMO_OWNER_FULL_NAME,
       assuranceLevel: "demo" as const,
       verifiedAt: new Date().toISOString(),
       attributes: {},
@@ -61,6 +62,30 @@ export class MockPropertyProvider implements PropertyProvider {
         source: "mock",
         address: "г. Астана, ул. Геодезическая, д. 12",
         unit: "52",
+        ownershipKind: "residential" as const,
+      },
+      authorizedSubjectIds: new Set(["00000000-0000-4000-8000-000000000001"]),
+    }],
+    ["1912", {
+      account: {
+        propertyId: "mock-property-geodezicheskaya-12-18",
+        accountId: "1912",
+        externalAccountId: "mock-account-1912",
+        source: "mock",
+        address: "г. Астана, ул. Геодезическая, д. 12",
+        unit: "18",
+        ownershipKind: "residential" as const,
+      },
+      authorizedSubjectIds: new Set(["00000000-0000-4000-8000-000000000001"]),
+    }],
+    ["2048", {
+      account: {
+        propertyId: "mock-property-sarayshyk-5-11",
+        accountId: "2048",
+        externalAccountId: "mock-account-2048",
+        source: "mock",
+        address: "г. Астана, ул. Сарайшык, д. 5",
+        unit: "11",
         ownershipKind: "residential" as const,
       },
       authorizedSubjectIds: new Set(["00000000-0000-4000-8000-000000000001"]),

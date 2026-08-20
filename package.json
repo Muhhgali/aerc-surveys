@@ -10,14 +10,18 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build && tsx scripts/run-e2e.ts",
+    "test:db": "tsx scripts/test-postgres.ts",
+    "test:db:bootstrap": "tsx scripts/bootstrap-test-database.ts",
     "test:restart": "npm run build && tsx scripts/restart-smoke.ts",
+    "db:up": "docker compose up -d",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "tsx scripts/seed.ts",
     "db:seed:preview": "tsx scripts/seed-preview.ts",
     "db:check": "tsx scripts/db-check.ts",
     "db:smoke": "tsx scripts/db-smoke.ts",
-    "db:reset:development": "tsx scripts/reset-development.ts"
+    "db:reset:development": "tsx scripts/reset-development.ts",
+    "admin:create": "tsx scripts/create-console-user.ts"
   },
   "dependencies": {
     "@fontsource/noto-sans": "^5.3.0",
@@ -36,6 +40,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.5",
+    "@electric-sql/pglite-socket": "^0.2.8",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",

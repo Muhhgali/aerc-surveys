@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ConfigurationError, loadProviderConfig } from "@/src/infrastructure/config/provider-config";
 import { assertPreviewSeedMutation } from "@/scripts/database-safety";
+import { normalizeDatabaseUrl, runtimeDatabaseUrl, runtimePoolMax } from "@/src/infrastructure/database/database-url";
 
 const previewEnvironment = {
   // Vercel always builds with NODE_ENV=production; APP_ENV is what selects the runtime profile.
@@ -87,5 +88,42 @@ describe("preview seed guard", () => {
 
     withSeedEnv({ APP_ENV: undefined, DATABASE_URL: previewEnvironment.DATABASE_URL, ALLOW_PREVIEW_SEED: "true" });
     expect(() => assertPreviewSeedMutation()).toThrow("requires an explicit APP_ENV");
+  });
+});
+
+describe("database URL normalisation", () => {
+  it("requires SSL on remote hosts and unwraps a copied Supabase password placeholder", () => {
+    const target = normalizeDatabaseUrl("postgresql://postgres.example:[demo-pass]@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres");
+    expect(target).toMatchObject({
+      remote: true,
+      sslmode: "require",
+      port: "5432",
+      database: "postgres",
+    });
+    expect(target.host).toContain("pooler.supabase.com");
+    expect(target.url).toContain("sslmode=require");
+    expect(target.url).not.toContain("[");
+    expect(target.url).not.toContain("]");
+  });
+
+  it("rejects a copied documentation placeholder instead of a real connection string", () => {
+    expect(() => normalizeDatabaseUrl("postgresql://postgres.example:<demo-pass>@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres?sslmode=require"))
+      .toThrow("documentation placeholder");
+  });
+
+  it("leaves loopback connections without SSL", () => {
+    const target = normalizeDatabaseUrl("postgresql://postgres@127.0.0.1:55432/aerc_surveys_test");
+    expect(target).toMatchObject({ remote: false, sslmode: "disable", port: "55432", database: "aerc_surveys_test" });
+  });
+
+  it("moves serverless runtime onto the Supabase transaction pooler", () => {
+    const target = runtimeDatabaseUrl("postgresql://postgres.example:secret@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres?sslmode=require");
+    expect(target.port).toBe("6543");
+    expect(runtimePoolMax(true, "5")).toBe(5);
+    expect(runtimePoolMax(true, "20")).toBe(5);
+    expect(runtimePoolMax(false, "10")).toBe(10);
+    // Explicit empty value, not the ambient DATABASE_POOL_MAX the developer's shell may export.
+    expect(runtimePoolMax(true, "")).toBe(5);
+    expect(runtimePoolMax(false, "")).toBe(10);
   });
 });

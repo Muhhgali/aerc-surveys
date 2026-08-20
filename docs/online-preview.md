@@ -22,8 +22,17 @@ Supabase Dashboard → **Project Settings → Database → Connection string**:
 | Application runtime (`DATABASE_URL` on Vercel) | Transaction pooler | `6543` | Serverless-safe. `postgres.js` already runs with `prepare: false`, which this mode requires. |
 | Migrations and preview seed (local shell) | Session pooler or direct connection | `5432` | DDL and advisory locks need a session-scoped connection. |
 
-Append `?sslmode=require` to both URLs. Never commit either string, and never paste the password
-into an issue, log or chat.
+Do not type a template. Copy the URI from the dashboard (it already has the real project ref and region), then:
+
+1. Replace `[YOUR-PASSWORD]` with the database password only — no `[]` and no `<>`.
+2. Append `?sslmode=require` if it is missing.
+3. Assign the whole copied string in quotes:
+
+```powershell
+$env:DATABASE_URL = "postgresql://postgres.abcdefghijklmnop:theActualPassword@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres?sslmode=require"
+```
+
+The host and `postgres.xxxxx` user in that example are fake. Yours will differ. If the password contains `#`, `@`, `:`, `/` or `?`, percent-encode those characters (`#` → `%23`). Never commit the string, and never paste the password into chat.
 
 ## 2. Vercel environment variables (Preview scope only)
 

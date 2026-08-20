@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { availableSurveysSql, materializeSurveyParticipantsSql } from "@/src/infrastructure/database/targeting-sql";
+import { availableSurveysSql, materializeSurveyParticipantsSql, ownerDocumentsSql } from "@/src/infrastructure/database/targeting-sql";
 
 const migrations = [
   "0000_production_data_model.sql", "0001_regular_madelyne_pryor.sql", "0002_superb_zodiak.sql",
@@ -92,6 +92,8 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await database.exec(`
+    delete from vote_answers;
+    delete from documents;
     delete from votes;
     delete from vote_sessions;
     delete from auth_sessions;
@@ -207,5 +209,51 @@ describe("local survey targeting", () => {
       await database.exec(`update surveys set status = '${status}' where id = '${id.survey}'`);
       expect(await catalogue(id.owner)).toHaveLength(0);
     }
+  });
+
+  it("keeps a submitted vote visible after the survey closes", async () => {
+    await target({ type: "personal_account", personalAccountId: id.account1911 });
+    await publish();
+    await database.exec(`update surveys set status = 'active', published_at = now() where id = '${id.survey}'`);
+    const eligible = await database.query<{ id: string }>(
+      `select id from survey_participants where survey_id = $1 and user_id = $2`,
+      [id.survey, id.owner],
+    );
+    await database.exec(`
+      insert into auth_sessions (id, token_hash, user_id, assurance_level, expires_at)
+        values ('50000000-0000-4000-8000-000000000701', 'closed-token-hash', '${id.owner}', 'demo', now() + interval '1 hour');
+      insert into vote_sessions (id, auth_session_id, participant_id, status, idempotency_key, expires_at, submitted_at)
+        values ('50000000-0000-4000-8000-000000000702', '50000000-0000-4000-8000-000000000701', '${eligible.rows[0].id}', 'submitted', 'closed-session', now() + interval '1 day', now());
+      insert into votes (id, vote_session_id, survey_id, participant_id, user_id, property_id, status, idempotency_key, submitted_at)
+        values ('50000000-0000-4000-8000-000000000703', '50000000-0000-4000-8000-000000000702', '${id.survey}', '${eligible.rows[0].id}', '${id.owner}', '${id.property}', 'submitted', 'closed-vote', now());
+    `);
+    await database.exec(`update surveys set status = 'closed' where id = '${id.survey}'`);
+    const rows = await catalogue(id.owner);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe(id.survey);
+  });
+
+  it("lists submitted voting sheets only for the owning identity", async () => {
+    await target({ type: "personal_account", personalAccountId: id.account1911 });
+    await publish();
+    const eligible = await database.query<{ id: string }>(
+      `select id from survey_participants where survey_id = $1 and user_id = $2`,
+      [id.survey, id.owner],
+    );
+    await database.exec(`
+      insert into auth_sessions (id, token_hash, user_id, assurance_level, expires_at)
+        values ('50000000-0000-4000-8000-000000000801', 'sheet-token-hash', '${id.owner}', 'demo', now() + interval '1 hour');
+      insert into vote_sessions (id, auth_session_id, participant_id, status, idempotency_key, expires_at, submitted_at)
+        values ('50000000-0000-4000-8000-000000000802', '50000000-0000-4000-8000-000000000801', '${eligible.rows[0].id}', 'submitted', 'sheet-session', now() + interval '1 day', now());
+      insert into votes (id, vote_session_id, survey_id, participant_id, user_id, property_id, status, idempotency_key, submitted_at)
+        values ('50000000-0000-4000-8000-000000000803', '50000000-0000-4000-8000-000000000802', '${id.survey}', '${eligible.rows[0].id}', '${id.owner}', '${id.property}', 'submitted', 'sheet-vote', now());
+      insert into documents (id, public_id, vote_id, survey_id, document_type, status, current_version)
+        values ('50000000-0000-4000-8000-000000000804', '50000000-0000-4000-8000-000000000805', '50000000-0000-4000-8000-000000000803', '${id.survey}', 'voting_sheet', 'generated', 1);
+    `);
+    const owned = await database.query<{ id: string; protocol: string; account: string }>(ownerDocumentsSql, [id.owner]);
+    expect(owned.rows).toHaveLength(1);
+    expect(owned.rows[0]).toMatchObject({ id: "50000000-0000-4000-8000-000000000805", protocol: "PREVIEW-1", account: "1911" });
+    const neighbour = await database.query(ownerDocumentsSql, [id.neighbour]);
+    expect(neighbour.rows).toHaveLength(0);
   });
 });

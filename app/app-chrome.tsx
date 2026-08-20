@@ -1,4 +1,4 @@
-import { ArrowLeft, BatteryFull, Signal, Wifi } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import type { ReactNode } from "react";
 
 export function Brand({ compact = false }: { compact?: boolean }) {
@@ -10,7 +10,6 @@ export function Brand({ compact = false }: { compact?: boolean }) {
 
 export function AppHeader({ title, onBack, action }: { title?: string; onBack?: () => void; action?: ReactNode }) {
   return <header className="app-header">
-    <div className="status-bar" aria-hidden="true"><span>09:41</span><span className="status-icons"><Signal size={12} /><Wifi size={13} /><BatteryFull size={16} /></span></div>
     <div className="nav-bar">
       {onBack ? <button className="icon-button" onClick={onBack} aria-label="Назад"><ArrowLeft size={21} /></button> : <Brand compact />}
       {title && <strong className="nav-title">{title}</strong>}<div className="nav-action">{action}</div>

@@ -48,12 +48,55 @@ export function assertSameOrigin(request: Request): void {
   }
 }
 
+function isTransientDatabaseError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : "";
+  const code = error && typeof error === "object" && "code" in error ? String((error as { code?: string }).code ?? "") : "";
+  return code === "EMAXCONNSESSION" || message.includes("EMAXCONNSESSION") || message.includes("max clients reached");
+}
+
+function postgresCode(error: unknown): string {
+  return error && typeof error === "object" && "code" in error ? String((error as { code?: string }).code ?? "") : "";
+}
+
+function isMissingRelation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : "";
+  return postgresCode(error) === "42P01" || message.includes("otp_challenges") || /relation .+ does not exist/i.test(message);
+}
+
+function isDatabaseUnavailable(error: unknown): boolean {
+  if (isMissingRelation(error)) return false;
+  const message = error instanceof Error ? error.message : "";
+  const name = error instanceof Error ? error.name : "";
+  const code = postgresCode(error);
+  return name === "PostgresError"
+    || code === "ECONNREFUSED"
+    || code === "CONNECT_TIMEOUT"
+    || message.includes("password authentication failed")
+    || message.includes("CONNECT_TIMEOUT")
+    || message.includes("connection refused");
+}
+
 export function errorResponse(error: unknown, requestId: string): Response {
   if (error instanceof ZodError) {
     return Response.json({ error: { code: "invalid_request", requestId, issues: error.issues.map((issue) => ({ path: issue.path, message: issue.message })) } }, { status: 400 });
   }
   if (error instanceof ApplicationError) {
     return Response.json({ error: { code: error.code, message: error.message, requestId } }, { status: statusByCode[error.code] });
+  }
+  if (isTransientDatabaseError(error)) {
+    console.error(JSON.stringify({ level: "error", event: "database.pool_exhausted", requestId, errorMessage: error instanceof Error ? error.message : "pool exhausted" }));
+    return Response.json({ error: { code: "internal_error", message: "Сервер базы перегружен. Повторите вход через несколько секунд.", requestId } }, { status: 503 });
+  }
+  if (isMissingRelation(error)) {
+    console.error(JSON.stringify({ level: "error", event: "database.missing_relation", requestId, errorMessage: error instanceof Error ? error.message : "missing relation" }));
+    const message = error instanceof Error && error.message.includes("otp_challenges")
+      ? "Этот способ входа ещё не готов. Войдите через eGov или Digital ID."
+      : "Необходимое обновление базы ещё не применено.";
+    return Response.json({ error: { code: "internal_error", message, requestId } }, { status: 503 });
+  }
+  if (isDatabaseUnavailable(error)) {
+    console.error(JSON.stringify({ level: "error", event: "database.unavailable", requestId, errorMessage: error instanceof Error ? error.message : "database unavailable" }));
+    return Response.json({ error: { code: "internal_error", message: "Нет связи с PostgreSQL. Локальный Docker не запущен — откройте https://aerc-surveys.vercel.app", requestId } }, { status: 503 });
   }
   const detail = error instanceof Error ? { errorName: error.name, errorMessage: error.message } : {};
   console.error(JSON.stringify({ level: "error", event: "http.unhandled_error", requestId, ...detail }));

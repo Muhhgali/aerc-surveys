@@ -2,14 +2,20 @@
 
 ## Требования
 
-Node.js/npm и persistent PostgreSQL 16+. Создайте отдельную базу, например `aerc_surveys_dev`; не используйте production database.
+Node.js/npm и PostgreSQL 16+ в Docker. Не используйте production/Supabase database в `.env.local`.
+
+```bash
+docker compose up -d
+```
+
+Контейнер `aerc-surveys-stage25` слушает только `127.0.0.1:55432`. В нём две базы: `aerc_surveys` (dev) и `aerc_surveys_test` (E2E). Локальный Supabase stack другого проекта на `54322` к этому приложению не относится.
 
 `.env.local` (не коммитить):
 
 ```dotenv
 APP_ENV=development
-DATABASE_URL=postgresql://USER:PASSWORD@127.0.0.1:5432/aerc_surveys_dev
-DATABASE_POOL_MAX=5
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55432/aerc_surveys
+DATABASE_POOL_MAX=10
 IDENTITY_PROVIDER=mock
 PROPERTY_PROVIDER=mock
 SIGNING_PROVIDER=mock
@@ -36,7 +42,7 @@ Development fixtures запускаются только с тремя явны�
 ```powershell
 $env:APP_ENV='development'
 $env:ALLOW_DEVELOPMENT_SEED='true'
-$env:DEVELOPMENT_DATABASE_NAME='aerc_surveys_dev'
+$env:DEVELOPMENT_DATABASE_NAME='aerc_surveys'
 npm run db:seed
 ```
 
@@ -45,7 +51,7 @@ Reset ещё опаснее и требует точного подтвержд�
 ```powershell
 $env:APP_ENV='development'
 $env:ALLOW_DEVELOPMENT_SEED='true'
-$env:DEVELOPMENT_DATABASE_NAME='aerc_surveys_dev'
+$env:DEVELOPMENT_DATABASE_NAME='aerc_surveys'
 $env:CONFIRM_DEVELOPMENT_RESET='RESET_DEVELOPMENT_DATA'
 npm run db:reset:development
 ```

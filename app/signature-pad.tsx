@@ -3,7 +3,7 @@
 import { Check, PenLine, RotateCcw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-export function SignaturePad({ onSave, onCancel }: { onSave: (value: string) => void; onCancel: () => void }) {
+export function SignaturePad({ onSave, onCancel, caption = "Подпись собственника" }: { onSave: (value: string) => void; onCancel: () => void; caption?: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
   const [hasInk, setHasInk] = useState(false);
@@ -58,7 +58,7 @@ export function SignaturePad({ onSave, onCancel }: { onSave: (value: string) => 
   return <div className="sheet-backdrop" role="dialog" aria-modal="true"><div className="signature-sheet">
     <div className="sheet-handle" /><button className="sheet-close" onClick={onCancel} aria-label="Закрыть"><X size={20} /></button>
     <div className="sheet-icon"><PenLine size={24} /></div><h2>Поставьте подпись</h2><p>Распишитесь пальцем в области ниже</p>
-    <div className="canvas-wrap"><canvas ref={canvasRef} onPointerDown={start} onPointerMove={move} onPointerUp={() => drawing.current = false} onPointerCancel={() => drawing.current = false} aria-label="Поле для рукописной подписи" /><span /><small>Подпись собственника</small></div>
+    <div className="canvas-wrap"><canvas ref={canvasRef} onPointerDown={start} onPointerMove={move} onPointerUp={() => drawing.current = false} onPointerCancel={() => drawing.current = false} aria-label="Поле для рукописной подписи" /><span /><small>{caption}</small></div>
     <div className="sheet-actions"><button className="button button-secondary" onClick={clear}><RotateCcw size={18} /> Очистить</button><button className="button button-primary" disabled={!hasInk} onClick={() => canvasRef.current && onSave(canvasRef.current.toDataURL("image/png"))}>Готово <Check size={18} /></button></div>
     {!hasInk && <span className="sheet-hint">Сначала поставьте подпись</span>}
   </div></div>;

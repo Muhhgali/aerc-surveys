@@ -11,7 +11,14 @@ export async function GET(request: Request) {
   try {
     const session = await requireCurrentSession(app.sessions, app.config.sessionCookieName);
     const user = await app.authentication.currentUser(session.subjectId);
-    return Response.json({ authenticated: true, user, expiresAt: session.expiresAt, requestId });
+    const holdings = await app.database<{ propertyId: string; accountNumber: string; city: string; street: string; building: string; unit: string }[]>`
+      select p.id as "propertyId", pa.account_number as "accountNumber", p.city, p.street, p.building, p.premise as unit
+      from property_holdings ph join properties p on p.id = ph.property_id
+      left join personal_accounts pa on pa.id = ph.personal_account_id
+      where ph.user_id = ${session.subjectId} and ph.status = 'active'
+      order by p.street, p.building, p.premise
+    `;
+    return Response.json({ authenticated: true, user, holdings, expiresAt: session.expiresAt, requestId });
   } catch (error) {
     return errorResponse(error, requestId);
   }

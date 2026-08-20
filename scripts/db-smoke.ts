@@ -1,5 +1,6 @@
 import postgres from "postgres";
-import { requireDatabaseUrl } from "./database-safety";
+import { requireDatabaseTarget } from "./database-safety";
+import { postgresClientOptions } from "../src/infrastructure/database/database-url";
 
 const expectedTables = [
   "users", "external_identities", "auth_sessions", "organizations", "properties", "personal_accounts",
@@ -7,7 +8,8 @@ const expectedTables = [
 ] as const;
 
 async function main() {
-  const sql = postgres(requireDatabaseUrl(), { max: 1, prepare: false, connect_timeout: 10 });
+  const target = requireDatabaseTarget();
+  const sql = postgres(target.url, postgresClientOptions(target));
   try {
     const tables = await sql<{ table_name: string }[]>`
       select table_name from information_schema.tables where table_schema = 'public' and table_name = any(${expectedTables as unknown as string[]})

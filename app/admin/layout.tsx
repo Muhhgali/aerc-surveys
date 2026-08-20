@@ -1,3 +1,4 @@
+import "../secondary.css";
 import "./admin.css";
 import type { ReactNode } from "react";
 

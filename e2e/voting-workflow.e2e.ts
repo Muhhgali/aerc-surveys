@@ -1,17 +1,8 @@
 import { expect, request, test, type Page } from "@playwright/test";
-import { createForeignSession, createForeignSurveyQuestion, e2eDatabase, expireSessionToken, foreignSessionToken, resetE2eState } from "./support";
+import { createForeignSession, createForeignSurveyQuestion, e2eDatabase, expireSessionToken, foreignSessionToken, resetE2eState, loginAsOwner as login, confirmSurveyOwner, signAndSubmitVote } from "./support";
 
 const surveyId = "00000000-0000-4000-8000-000000000012";
 const questionIds = [1, 2, 3, 4, 5, 6].map((number) => `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`);
-
-async function login(page: Page) {
-  await page.goto("/login");
-  await page.getByRole("button", { name: /Войти через eGov/ }).click();
-  const proceed = page.getByRole("button", { name: /Продолжить/ });
-  await expect(proceed).toBeEnabled({ timeout: 4_000 });
-  await proceed.click();
-  await expect(page.getByRole("heading", { name: "Мои опросы" })).toBeVisible();
-}
 
 async function startVoteViaApi(page: Page) {
   const response = await page.request.post(`/api/surveys/${surveyId}/votes`, {
@@ -28,11 +19,7 @@ test("happy path persists answers across refresh and submits idempotently", asyn
   await login(page);
   await page.locator(".survey-card", { hasText: "ПРОТОКОЛ №12" }).getByRole("button", { name: /Пройти/ }).click();
   await page.getByRole("button", { name: /^Начать/ }).click();
-  await page.getByLabel("Лицевой счёт").fill("1911");
-  await page.getByRole("button", { name: /Найти объект/ }).click();
-  await expect(page.getByText("г. Астана, ул. Геодезическая, д. 12")).toBeVisible();
-  await expect(page.getByText("52", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /Перейти к голосованию/ }).click();
+  await confirmSurveyOwner(page);
 
   for (const answer of ["За", "Против", "За"]) {
     await page.getByRole("button", { name: new RegExp(`^${answer}`) }).click();
@@ -54,20 +41,16 @@ test("happy path persists answers across refresh and submits idempotently", asyn
   }
   await expect(page.getByText("6 из 6 вопросов заполнено")).toBeVisible();
   await page.getByRole("button", { name: /Перейти к подтверждению/ }).click();
-  await page.getByRole("button", { name: /Добавить визуальную подпись/ }).click();
-  const canvas = page.getByLabel("Поле для рукописной подписи");
-  const box = await canvas.boundingBox();
-  if (!box) throw new Error("Signature canvas is not visible");
-  await canvas.dispatchEvent("pointerdown", { pointerId: 1, clientX: box.x + 20, clientY: box.y + 35, buttons: 1 });
-  await canvas.dispatchEvent("pointermove", { pointerId: 1, clientX: box.x + 110, clientY: box.y + 60, buttons: 1 });
-  await canvas.dispatchEvent("pointerup", { pointerId: 1, clientX: box.x + 110, clientY: box.y + 60 });
-  await page.getByRole("button", { name: /Готово/ }).click();
-  await page.getByRole("button", { name: /Подтвердить и отправить/ }).click();
-  await page.getByRole("dialog").getByRole("button", { name: /Отправить голосование/ }).click();
-  await expect(page.getByRole("heading", { name: "Голос принят" })).toBeVisible();
-  const documentId = (await page.locator(".document-id").textContent())?.trim();
+  const documentId = await signAndSubmitVote(page);
   expect(documentId).toMatch(/^[0-9a-f-]{36}$/);
-  if (!documentId) throw new Error("Final document ID is missing");
+
+  await page.getByRole("button", { name: /На главную/ }).click();
+  await page.getByRole("button", { name: /Все листы/ }).click();
+  await expect(page.locator(".archive-card", { hasText: "ПРОТОКОЛ №12" })).toBeVisible();
+  const listed = await page.request.get("/api/documents");
+  expect(listed.status()).toBe(200);
+  const archive = await listed.json() as { documents: { id: string; protocol: string }[] };
+  expect(archive.documents.some((document) => document.id === documentId && document.protocol === "12")).toBe(true);
 
   await page.goto(`/verify/${documentId}`);
   await expect(page.getByRole("heading", { name: "Документ найден" })).toBeVisible();
