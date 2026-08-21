@@ -2,7 +2,7 @@
 
 Фактическая память проекта. Обновляйте после существенных изменений. Секреты и содержимое `.env` сюда не помещать.
 
-**Последнее обновление:** 2026-08-20  
+**Последнее обновление:** 2026-08-21  
 **Текущая ветка:** `stage-5-voting-workflow`  
 **Remote:** `origin` → https://github.com/Muhhgali/aerc-surveys.git
 
@@ -106,14 +106,14 @@ tests/                        Vitest unit/integration tests
 ### Data layer
 
 - ~25 tables: users, identities, sessions, organizations, properties, accounts, surveys, votes, answers, documents, audit, platform RBAC, etc.
-- Migrations: `0000`–`0008` (`0004` = Stage 4 RBAC/admin, `0005` = `property_holdings`, `0006` = voting workflow, `0007` = organization accounts, `0008` = named signatories + `official_signatures.signatory_id`)
-- Hosted online Postgres (Vercel production) has `0000`–`0006` applied (2026-08-20): `vote_contact_details`, grants, OTP, snapshots, signatories. Admin dashboard and vote contacts no longer fail with missing-relation 503.
+- Migrations: `0000`–`0009` (`0004` = Stage 4 RBAC/admin, `0005` = `property_holdings`, `0006` = voting workflow, `0007` = organization accounts, `0008` = named signatories + `official_signatures.signatory_id`, `0009` = admin list/dashboard indexes)
+- Hosted online Postgres (Vercel production, Supabase session pooler) has `0000`–`0009` applied. Demo public alias: https://aerc-surveys.vercel.app. Development/hosted seed **does not create surveys**; E2E (`APP_ENV=test`) still fixtures protocols №12 and №41. Chairman console: `chairman@geodez12.kz` / `Chairman26` for ОСИ «ЖК Геодезическая, 12». This is the existing demo hosting, not legal eGov production.
 
 ### Tests & tooling
 
 - Unit: vote lifecycle, admin domain, PDF renderer, application services, postgres migrations (PGlite)
 - E2E: full voting happy path + security cases; admin publish→vote→close cycle; official post-close signing + protocol/sheet PDFs (`e2e/official-documents.e2e.ts`)
-- Seed survey **№41** «Установка системы видеонаблюдения…» targets account **1911** with six named signatories on `admin@aerc.kz`
+- Seed: no surveys in development/preview; E2E (`APP_ENV=test`) still uses protocols **№12** and **№41**. Chairman account `chairman@geodez12.kz` / `Chairman26` for ОСИ «ЖК Геодезическая, 12».
 - Scripts: `db:check`, `db:smoke`, `db:seed`, `db:seed:preview`, `db:reset:development`, `test:restart`
 
 ---
@@ -158,7 +158,7 @@ tests/                        Vitest unit/integration tests
 - Targeting резолвится из `property_holdings`; building registry отсутствует до подключения AERC Billing
 - `app/survey-app.tsx` определяет большинство экранов как inline-компоненты (тост во время подписи может перемонтировать Sign). Экраны лицевого счёта и голосования вынесены в стабильные `OwnerAccountScreen` / `OwnerVoteScreen`. Ответы применяются сразу, autosave идёт в фоне и не блокирует «Далее». После входа сначала `/property` (счёт → адрес), затем список опросов; при «Пройти» подтверждаются адрес, квартира и ФИО.
 - `docs/production-roadmap.md` содержит устаревший абзац «Stage 4 не начат» в конце — противоречит фактическому состоянию
-- Нет `vercel.json` / deploy config в репозитории (исторически проект деплоился на Vercel)
+- `vercel.json` `buildCommand` runs `scripts/migrate-hosted.mjs` only when `VERCEL_ENV=production`, then `next build`. The script picks the env URL that already has `surveys` (not the empty Neon `neondb`) and applies pending `0007`/`0008`.
 - Notification provider — mock only, не wired to real delivery
 - E2E требует PostgreSQL `aerc_surveys_test` в том же Docker-контейнере, что и local dev (`127.0.0.1:55432`)
 

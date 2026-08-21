@@ -46,6 +46,12 @@ $env:DEVELOPMENT_DATABASE_NAME='aerc_surveys'
 npm run db:seed
 ```
 
+После seed в консоли:
+
+- Платформа: `admin@aerc.kz` / `DemoAdmin26`
+- Председатель ОСИ «ЖК Геодезическая, 12»: `chairman@geodez12.kz` / `Chairman26` (создаёт опросы своей организации, без super_admin)
+- Опросы и журнал аудита пустые; председатель создаёт опросники сам.
+
 Reset ещё опаснее и требует точного подтверждения:
 
 ```powershell

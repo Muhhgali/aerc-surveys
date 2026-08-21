@@ -27,5 +27,6 @@ describe("demo identity fixtures", () => {
     expect(isDemoAdminPassword("  ADMIN@aerc.kz ", "DemoAdmin26")).toBe(true);
     expect(isDemoAdminPassword(DEMO_ADMIN_LOGIN, "wrong")).toBe(false);
     expect(isDemoAdminPassword("owner@aerc.kz", "DemoAdmin26")).toBe(false);
+    expect(isDemoAdminPassword("chairman@geodez12.kz", "Chairman26")).toBe(false);
   });
 });

@@ -167,6 +167,24 @@ test("B–D: an organization runs its own survey, the owner votes and both conso
   await expect(page.getByText("valid", { exact: true })).toBeVisible();
 });
 
+test("seeded chairman logs in as an organization principal and can create a survey", async ({ page }) => {
+  await signIn(page, "chairman@geodez12.kz", "Chairman26");
+  const organizations = await page.request.get("/api/admin/organizations");
+  expect(organizations.status()).toBe(200);
+  expect(((await organizations.json()).items as { id: string }[]).map((item) => item.id)).toEqual([seedIds.organizationChairman]);
+  expect((await page.request.get("/api/admin/audit")).status()).toBe(403);
+  const created = await page.request.post("/api/admin/surveys", {
+    headers: { origin },
+    data: {
+      protocolNumber: `CHAIR-${Date.now()}`, titleRu: "Опрос председателя", titleKk: "Төраға сауалнамасы",
+      descriptionRu: "Черновик председателя ОСИ", descriptionKk: "ОСИ төрағасының жобасы",
+      startsAt: new Date(Date.now() - 60_000).toISOString(), closesAt: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+    },
+  });
+  expect(created.status()).toBe(201);
+  expect((await created.json() as { organizationId: string }).organizationId).toBe(seedIds.organizationChairman);
+});
+
 test("E: one organization cannot reach another organization's survey, results, participants or documents", async ({ page }) => {
   await signIn(page, aerc.login, aerc.password);
   const organizationA = await createOrganization(page, "1");

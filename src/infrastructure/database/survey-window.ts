@@ -12,12 +12,15 @@ export async function ensureSurveyWindow(sql: DatabaseClient, surveyId: string, 
 }
 
 export async function ensureDueSurveyWindows(sql: DatabaseClient, requestId: string): Promise<void> {
-  const due = await sql<{ id: string }[]>`
-    select id from surveys
-    where (status='scheduled' and starts_at is not null and starts_at <= now())
-       or (status='active' and closes_at is not null and closes_at <= now())
-  `;
-  for (const row of due) await ensureSurveyWindow(sql, row.id, null, requestId);
+  await sql.begin(async (tx) => {
+    const due = await tx<{ id: string }[]>`
+      select id from surveys
+      where (status='scheduled' and starts_at is not null and starts_at <= now())
+         or (status='active' and closes_at is not null and closes_at <= now())
+      for update skip locked
+    `;
+    for (const row of due) await closeSurveyIfDue(tx, row.id, null, requestId);
+  });
 }
 
 export async function closeSurveyIfDue(tx: Tx, surveyId: string, actorId: string | null, requestId: string): Promise<void> {

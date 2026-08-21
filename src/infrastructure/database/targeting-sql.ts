@@ -57,20 +57,33 @@ on conflict (survey_id, user_id, property_id) do nothing
 export const availableSurveysSql = `
 select s.id, s.protocol_number as protocol, s.title_ru as title, s.description_ru as subtitle,
   s.starts_at as "startsAt", s.closes_at as "closesAt", s.status,
-  bool_or(v.status = 'submitted') as submitted,
-  json_agg(
-    json_build_object('id', q.id, 'position', q.position, 'text', q.text_ru, 'textKk', q.text_kk)
-    order by q.position
+  exists (
+    select 1 from votes v
+    where v.survey_id = s.id and v.user_id = $1::uuid and v.status = 'submitted'
+  ) as submitted,
+  (
+    select json_agg(
+      json_build_object('id', q.id, 'position', q.position, 'text', q.text_ru, 'textKk', q.text_kk)
+      order by q.position
+    )
+    from survey_questions q where q.survey_id = s.id and q.status = 'active'
   ) as questions
 from surveys s
-join survey_participants sp
-  on sp.survey_id = s.id and sp.user_id = $1::uuid and sp.status = 'eligible'
-join survey_questions q on q.survey_id = s.id and q.status = 'active'
-left join votes v
-  on v.survey_id = s.id and v.user_id = $1::uuid and v.status = 'submitted'
-where s.status in ('active', 'scheduled')
-  or (s.status = 'closed' and v.id is not null)
-group by s.id
+where exists (
+    select 1 from survey_participants sp
+    where sp.survey_id = s.id and sp.user_id = $1::uuid and sp.status = 'eligible'
+  )
+  and exists (select 1 from survey_questions q where q.survey_id = s.id and q.status = 'active')
+  and (
+    s.status in ('active', 'scheduled')
+    or (
+      s.status = 'closed'
+      and exists (
+        select 1 from votes v
+        where v.survey_id = s.id and v.user_id = $1::uuid and v.status = 'submitted'
+      )
+    )
+  )
 order by s.starts_at, s.created_at
 `;
 

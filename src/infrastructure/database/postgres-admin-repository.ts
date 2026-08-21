@@ -80,7 +80,12 @@ export class PostgresAdminRepository implements AdminRepository {
     const orgs = scope ?? null;
     const [surveys, participants, documents, activity] = await Promise.all([
       this.sql<Record<string, number>[]>`select count(*) filter (where status='draft')::int as draft, count(*) filter (where status='scheduled')::int as scheduled, count(*) filter (where status='active')::int as active, count(*) filter (where status='closed')::int as closed from surveys s where ${orgs}::uuid[] is null or s.organization_id = any(${orgs}::uuid[])`,
-      this.sql<{ eligible: number; started: number; completed: number }[]>`select count(*) filter (where sp.status='eligible')::int as eligible, count(distinct v.id) filter (where v.status <> 'voided')::int as started, count(distinct v.id) filter (where v.status='submitted')::int as completed from survey_participants sp join surveys s on s.id=sp.survey_id left join votes v on v.participant_id=sp.id where ${orgs}::uuid[] is null or s.organization_id = any(${orgs}::uuid[])`,
+      this.sql<{ eligible: number; started: number; completed: number }[]>`
+        select
+          (select count(*)::int from survey_participants sp join surveys s on s.id=sp.survey_id where sp.status='eligible' and (${orgs}::uuid[] is null or s.organization_id = any(${orgs}::uuid[]))) as eligible,
+          (select count(*)::int from votes v join surveys s on s.id=v.survey_id where v.status <> 'voided' and (${orgs}::uuid[] is null or s.organization_id = any(${orgs}::uuid[]))) as started,
+          (select count(*)::int from votes v join surveys s on s.id=v.survey_id where v.status='submitted' and (${orgs}::uuid[] is null or s.organization_id = any(${orgs}::uuid[]))) as completed
+      `,
       this.sql<{ finalized: number }[]>`select count(*)::int as finalized from documents d join surveys s on s.id=d.survey_id where d.status='generated' and (${orgs}::uuid[] is null or s.organization_id = any(${orgs}::uuid[]))`,
       orgs
         ? this.sql<Record<string, unknown>[]>`select al.id, al.event_type as "eventType", al.outcome, al.request_id as "requestId", al.occurred_at as "occurredAt", u.display_name as actor from audit_logs al left join users u on u.id=al.actor_user_id join surveys s on s.id=al.subject_id and al.subject_type='survey' where s.organization_id = any(${orgs}::uuid[]) order by al.occurred_at desc limit 8`
@@ -98,14 +103,15 @@ export class PostgresAdminRepository implements AdminRepository {
       select s.id, s.organization_id as "organizationId", s.protocol_number as "protocolNumber", s.version, s.lock_version as "lockVersion",
         s.title_ru as "titleRu", s.title_kk as "titleKk", s.description_ru as "descriptionRu", s.description_kk as "descriptionKk",
         s.status, s.starts_at as "startsAt", s.closes_at as "closesAt", s.created_at as "createdAt",
-        count(distinct q.id)::int as "questionCount", count(distinct sp.id) filter (where sp.status='eligible')::int as "eligibleCount",
-        count(distinct v.id) filter (where v.status='submitted')::int as "completedCount", count(*) over()::int as total
-      from surveys s left join survey_questions q on q.survey_id=s.id and q.status='active'
-      left join survey_participants sp on sp.survey_id=s.id left join votes v on v.survey_id=s.id
+        (select count(*)::int from survey_questions q where q.survey_id=s.id and q.status='active') as "questionCount",
+        (select count(*)::int from survey_participants sp where sp.survey_id=s.id and sp.status='eligible') as "eligibleCount",
+        (select count(*)::int from votes v where v.survey_id=s.id and v.status='submitted') as "completedCount",
+        count(*) over()::int as total
+      from surveys s
       where (${search}::text is null or s.title_ru ilike '%'||${search}||'%' or coalesce(s.title_kk,'') ilike '%'||${search}||'%' or s.protocol_number ilike '%'||${search}||'%')
         and (${status}::text is null or s.status::text=${status}) and (${from}::timestamptz is null or s.starts_at >= ${from}) and (${to}::timestamptz is null or s.starts_at <= ${to})
         and (${orgs}::uuid[] is null or s.organization_id = any(${orgs}::uuid[]))
-      group by s.id order by s.created_at desc limit ${size} offset ${offset}
+      order by s.created_at desc limit ${size} offset ${offset}
     `;
     return { items: rows.map(this.summary), page: Math.floor(offset / size) + 1, pageSize: size, total: rows[0]?.total ?? 0 };
   }
@@ -122,10 +128,11 @@ export class PostgresAdminRepository implements AdminRepository {
   async getSurvey(id: string, executor?: Tx): Promise<AdminSurveyDetail | null> {
     const sql = executor ?? this.sql;
     if (!executor) await ensureSurveyWindow(this.sql, id, null, "survey-window");
-    const rows = await sql<SurveyRow[]>`
+    const rows = await sql<(SurveyRow & { meetingForm: AdminSurveyDetail["meetingForm"]; documentLanguage: AdminSurveyDetail["documentLanguage"] })[]>`
       select s.id, s.organization_id as "organizationId", s.protocol_number as "protocolNumber", s.version, s.lock_version as "lockVersion",
         s.title_ru as "titleRu", s.title_kk as "titleKk", s.description_ru as "descriptionRu", s.description_kk as "descriptionKk", s.status,
         s.starts_at as "startsAt", s.closes_at as "closesAt", s.created_at as "createdAt",
+        s.meeting_form as "meetingForm", s.document_language as "documentLanguage",
         (select count(*)::int from survey_questions q where q.survey_id=s.id and q.status='active') as "questionCount",
         (select count(*)::int from survey_participants sp where sp.survey_id=s.id and sp.status='eligible') as "eligibleCount",
         (select count(*)::int from votes v where v.survey_id=s.id and v.status='submitted') as "completedCount"
@@ -147,10 +154,9 @@ export class PostgresAdminRepository implements AdminRepository {
     const assigned = new Map<string, number>();
     for (const row of signatories) assigned.set(row.roleKey, (assigned.get(row.roleKey) ?? 0) + 1);
     const signaturePolicy = policy.map((row) => ({ roleKey: row.roleKey as SurveySignatoryRoleKey, minRequired: row.minRequired, assignedCount: assigned.get(row.roleKey) ?? 0 }));
-    const meeting = await sql<{ meetingForm: AdminSurveyDetail["meetingForm"]; documentLanguage: AdminSurveyDetail["documentLanguage"] }[]>`select meeting_form as "meetingForm", document_language as "documentLanguage" from surveys where id=${id}`;
     return {
       ...this.summary(rows[0]), organizationId: rows[0].organizationId, descriptionRu: rows[0].descriptionRu, descriptionKk: rows[0].descriptionKk,
-      meetingForm: meeting[0]?.meetingForm, documentLanguage: meeting[0]?.documentLanguage,
+      meetingForm: rows[0].meetingForm, documentLanguage: rows[0].documentLanguage,
       questions: questions.map((question) => ({ ...question, votingRule: parseVotingRule(question.votingRule) })),
       targets, signatories: signatories.map((row) => ({ ...row, signedAt: row.signedAt ? row.signedAt.toISOString() : null })), signaturePolicy,
       protocolPublicId: protocol[0]?.publicId ?? null,
@@ -387,9 +393,10 @@ export class PostgresAdminRepository implements AdminRepository {
     const {size,offset}=page(query); const search=query.search?.trim()||null;
     const rows=await this.sql<(Record<string,unknown>&{total:number})[]>`
       select u.id, u.display_name as "displayName", u.status, pac.disabled_at as "adminDisabledAt", coalesce(array_agg(distinct pr.role_key) filter(where pr.role_key is not null),'{}') as roles,
-        max(al.occurred_at) as "lastActivity", count(*) over()::int as total
-      from users u left join platform_access_controls pac on pac.user_id=u.id left join user_platform_roles upr on upr.user_id=u.id left join platform_roles pr on pr.id=upr.role_id left join audit_logs al on al.actor_user_id=u.id
-      where (${search}::text is null or u.display_name ilike '%'||${search}||'%' or coalesce(u.email,'') ilike '%'||${search}||'%') group by u.id,pac.disabled_at order by u.display_name limit ${size} offset ${offset}`;
+        al.last_activity as "lastActivity", count(*) over()::int as total
+      from users u left join platform_access_controls pac on pac.user_id=u.id left join user_platform_roles upr on upr.user_id=u.id left join platform_roles pr on pr.id=upr.role_id
+      left join (select actor_user_id, max(occurred_at) as last_activity from audit_logs group by actor_user_id) al on al.actor_user_id=u.id
+      where (${search}::text is null or u.display_name ilike '%'||${search}||'%' or coalesce(u.email,'') ilike '%'||${search}||'%') group by u.id,pac.disabled_at,al.last_activity order by u.display_name limit ${size} offset ${offset}`;
     return {items:rows.map(withoutTotal),page:Math.floor(offset/size)+1,pageSize:size,total:rows[0]?.total??0};
   }
 

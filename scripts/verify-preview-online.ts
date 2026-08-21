@@ -30,18 +30,25 @@ async function fixtures() {
       select count(*)::int as n from property_holdings
       where user_id = ${seedIds.voterUser} and personal_account_id = ${seedIds.personalAccount} and status = 'active'
     `;
-    const [survey] = await sql<{ protocol_number: string; status: string }[]>`
-      select protocol_number, status from surveys where id = ${seedIds.survey12}
+    const [surveyCount] = await sql<{ n: number }[]>`select count(*)::int as n from surveys`;
+    const [chairman] = await sql<{ login: string; role: string }[]>`
+      select uc.login, g.role_key as role
+      from user_credentials uc
+      join organization_access_grants g on g.user_id = uc.user_id
+      where uc.user_id = ${seedIds.chairmanUser} and g.organization_id = ${seedIds.organizationChairman}
     `;
-    const [org] = await sql<{ display_name: string }[]>`select display_name from organizations where id = ${seedIds.organization}`;
+    const [org] = await sql<{ display_name: string }[]>`select display_name from organizations where id = ${seedIds.organizationChairman}`;
+    const [audit] = await sql<{ n: number }[]>`select count(*)::int as n from audit_logs`;
     return {
       host: `${target.host}:${target.port}`,
       users: users.n,
       superAdmin: roles.n === 1,
       account1911: account ?? null,
       holding: holding.n === 1,
-      protocol12: survey ?? null,
+      surveys: surveyCount.n,
+      chairman: chairman ?? null,
       organization: org?.display_name ?? null,
+      audit: audit.n,
     };
   } finally {
     await sql.end({ timeout: 1 }).catch(() => undefined);
@@ -171,12 +178,14 @@ async function main() {
   const data = await fixtures();
   console.info(JSON.stringify({ fixtures: data }, null, 2));
   const missing = [
-    data.users >= 2 ? null : "users",
+    data.users >= 3 ? null : "users",
     data.superAdmin ? null : "super_admin",
     data.account1911?.account_number === "1911" ? null : "account1911",
     data.holding ? null : "holding",
-    data.protocol12?.protocol_number === "12" ? null : "protocol12",
-    data.organization ? null : "organization",
+    data.surveys === 0 ? null : "surveys_not_empty",
+    data.chairman?.login === "chairman@geodez12.kz" && data.chairman.role === "chairman" ? null : "chairman",
+    data.organization ? null : "chairman_organization",
+    data.audit === 0 ? null : "audit_not_empty",
   ].filter(Boolean);
   if (missing.length) {
     console.error(JSON.stringify({ incompleteFixtures: missing }));

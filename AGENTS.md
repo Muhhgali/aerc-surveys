@@ -137,7 +137,8 @@ PostgreSQL 16+ обязателен. `DATABASE_URL` в `.env.local`.
 | Админка | `app/admin/`, `src/application/admin/`, `app/api/admin/` |
 | RBAC | `src/domain/admin-rbac.ts`, `src/infrastructure/session/admin-authorization.ts` |
 | Resident OTP | `src/application/resident-auth/`, `/api/auth/otp/*` |
-| Схема БД | `src/infrastructure/database/schema.ts`, `drizzle/` |
+| Схема БД | `src/infrastructure/database/schema.ts`, `drizzle/` (`0000`–`0009`) |
+| Hosted migrate | `vercel.json` + `scripts/migrate-hosted.mjs` (только `VERCEL_ENV=production`) |
 | Провайдер | `src/infrastructure/providers/registry.ts`, mock в `mock/` |
 | E2E | `e2e/`, `scripts/run-e2e.ts` |
 

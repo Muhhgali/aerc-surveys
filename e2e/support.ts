@@ -1,7 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import postgres from "postgres";
-import { seedDevelopmentData, seedIds, seededSurveyIds } from "../src/infrastructure/database/seed-data";
+import { seedDevelopmentData, seedIds, seededOrganizationIds, seededSurveyIds, seededUserIds } from "../src/infrastructure/database/seed-data";
 
 const foreign = {
   user: "90000000-0000-4000-8000-000000000001",
@@ -37,17 +37,17 @@ export async function resetE2eState() {
       await transaction`delete from surveys where id not in ${transaction([...seededSurveyIds])}`;
       await transaction`delete from user_platform_roles where user_id <> ${seedIds.representativeUser}`;
       await transaction`delete from user_platform_roles upr using platform_roles pr where upr.role_id=pr.id and upr.user_id=${seedIds.representativeUser} and pr.role_key <> 'super_admin'`;
-      await transaction`delete from platform_access_controls where user_id <> ${seedIds.representativeUser}`;
+      await transaction`delete from platform_access_controls where user_id not in ${transaction([...seededUserIds])}`;
       await transaction`delete from survey_participants where id = ${foreign.participant}`;
       await transaction`delete from external_identities where user_id = ${foreign.user}`;
       await transaction`delete from users where id = ${foreign.user}`;
       await transaction`delete from surveys where id = ${foreign.survey}`;
       // Console accounts and organizations created by a previous run would collide on the unique login and BIN.
       await transaction`
-        delete from users u where u.id not in (${seedIds.voterUser}, ${seedIds.representativeUser})
+        delete from users u where u.id not in ${transaction([...seededUserIds])}
           and not exists (select 1 from survey_participants sp where sp.user_id = u.id)
       `;
-      await transaction`delete from organizations where id not in ${transaction([seedIds.organization, seedIds.organizationKsk, seedIds.organizationService])}`;
+      await transaction`delete from organizations where id not in ${transaction([...seededOrganizationIds])}`;
       // Seeded surveys must be draft before seed upserts titles/questions; the published-content trigger
       // rejects those updates while status is active.
       await transaction`update surveys set status = 'draft' where id in ${transaction([...seededSurveyIds])}`;

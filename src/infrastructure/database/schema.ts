@@ -186,6 +186,7 @@ export const surveys = pgTable("surveys", {
 }, (table) => [
   uniqueIndex("surveys_org_protocol_unique").on(table.organizationId, table.protocolNumber),
   index("surveys_status_period_idx").on(table.status, table.startsAt, table.closesAt),
+  index("surveys_organization_status_idx").on(table.organizationId, table.status),
   check("surveys_period_valid", sql`${table.closesAt} is null or ${table.startsAt} is null or ${table.closesAt} > ${table.startsAt}`),
 ]);
 
@@ -412,6 +413,7 @@ export const auditLogs = pgTable("audit_logs", {
   index("audit_logs_request_idx").on(table.requestId),
   index("audit_logs_actor_idx").on(table.actorUserId),
   index("audit_logs_event_occurred_idx").on(table.eventType, table.occurredAt),
+  index("audit_logs_occurred_idx").on(table.occurredAt),
   check("audit_logs_outcome_valid", sql`${table.outcome} in ('success', 'failure')`),
 ]);
 

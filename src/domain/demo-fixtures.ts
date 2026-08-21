@@ -48,6 +48,10 @@ export function kzPhoneFromInput(value: string): string {
 export const DEMO_ADMIN_LOGIN = "admin@aerc.kz";
 export const DEMO_ADMIN_PASSWORD = "DemoAdmin26";
 
+/** Organization chairman: org-scoped console account, not a platform super_admin. */
+export const DEMO_CHAIRMAN_LOGIN = "chairman@geodez12.kz";
+export const DEMO_CHAIRMAN_PASSWORD = "Chairman26";
+
 export function displayNameInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   return `${parts[0]?.[0] ?? ""}${parts[1]?.[0] ?? ""}`.toUpperCase() || "—";
